@@ -1,36 +1,129 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# DocAgent - Document Q&A with AI
+
+A web app that lets you upload documents and ask questions about them. Uses Groq LLM for fast responses and Gemini for image OCR.
+
+Built for the NextBharat Technical Assignment.
+
+## Features
+
+- Upload PDF, DOCX, and image files (PNG, JPG)
+- Ask questions about uploaded documents  
+- AI generates answers based only on document content (grounded responses)
+- Shows which page/section the answer came from
+- OCR support for scanned PDFs and images
+- Modern dark themed UI
+
+## Tech Stack
+
+- **Frontend**: Next.js 14, React, TypeScript
+- **Backend**: Next.js API Routes
+- **AI/LLM**: Groq (llama-3.3-70b-versatile) - fast and free
+- **OCR**: Google Gemini (gemini-2.0-flash) - for image text extraction
+- **Storage**: In-memory (can use Azure Blob if configured)
+- **Text Extraction**: unpdf for PDFs, mammoth for DOCX
 
 ## Getting Started
 
-First, run the development server:
+### Prerequisites
+
+- Node.js 18+
+- Groq API key (free from https://console.groq.com/keys)
+- Gemini API key (free from https://aistudio.google.com/app/apikey) - optional, for image OCR
+
+### Installation
+
+```bash
+cd doc-agent
+
+npm install
+
+cp .env.example .env.local
+```
+
+Add your API keys to `.env.local`:
+
+```
+GROQ_API_KEY=your_groq_key
+GEMINI_API_KEY=your_gemini_key
+```
+
+Then start:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open http://localhost:3000
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## How It Works
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+### 1. Upload
 
-## Learn More
+User uploads a document. Gets stored in memory and assigned a unique ID.
 
-To learn more about Next.js, take a look at the following resources:
+### 2. Text Extraction
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- **PDF**: Uses `unpdf` library to extract text. If PDF is scanned (no text), falls back to OCR using Gemini Vision
+- **DOCX**: Uses `mammoth` library
+- **Images**: Uses Gemini Vision API for OCR
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+### 3. Chunking & Embedding
 
-## Deploy on Vercel
+Text is split into ~500 character chunks with overlap. Each chunk gets a local hash-based embedding (since Groq doesn't have embedding API).
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+### 4. Question Answering
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+When user asks a question:
+1. Find relevant chunks using similarity search
+2. Build prompt with chunks as context
+3. Send to Groq LLM with grounding instructions
+4. Return answer with source citations
+
+### 5. Grounding
+
+The AI only uses info from the document. If something isn't there, it says so instead of making stuff up.
+
+## Project Structure
+
+```
+doc-agent/
+├── src/
+│   ├── app/
+│   │   ├── api/
+│   │   │   ├── upload/route.ts    - handles file uploads
+│   │   │   ├── chat/route.ts      - handles Q&A
+│   │   │   └── documents/route.ts - list/delete docs
+│   │   ├── page.tsx               - main page
+│   │   └── globals.css            - styles
+│   ├── components/
+│   │   ├── DocumentUpload.tsx     - drag & drop upload
+│   │   ├── ChatInterface.tsx      - chat UI
+│   │   └── DocumentList.tsx       - doc list
+│   └── lib/
+│       ├── azure-blob.ts          - storage (in-memory or azure)
+│       ├── azure-openai.ts        - groq client & embeddings
+│       ├── document-processor.ts  - text extraction & chunking
+│       └── vector-store.ts        - in-memory vector db
+└── docs/
+    └── ARCHITECTURE.md
+```
+
+## Example Questions
+
+After uploading try asking:
+
+- "What is this document about?"
+- "Summarize the main points"
+- "What are the key findings?"
+- "Does it mention any numbers or dates?"
+
+## Limitations
+
+- Vector store is in-memory (data lost on restart)
+- Local embeddings (not semantic, but works for small docs)
+- Max file size 10MB
+- OCR limited to 5 pages for scanned PDFs
+
+---
+
+Made for NextBharat Internship Assignment - Jan 2026
