@@ -1,8 +1,9 @@
 # DocAgent - Document Q&A with AI
 
 A web app that lets you upload documents and ask questions about them. Uses Groq LLM for fast responses and Gemini for image OCR.
+🔗 **Live Demo**: https://docagent-ai-rag-system.vercel.app/
+<img width="1427" height="696" alt="Screenshot 2026-05-01 at 1 31 25 AM" src="https://github.com/user-attachments/assets/4a007575-fcfa-4b2d-9821-7a3021a59150" />
 
-Built for the NextBharat Technical Assignment.
 
 ## Features
 
@@ -117,12 +118,6 @@ After uploading try asking:
 - "What are the key findings?"
 - "Does it mention any numbers or dates?"
 
-## Limitations
+<img width="1427" height="900" alt="Screenshot 2026-05-01 at 1 31 46 AM" src="https://github.com/user-attachments/assets/ce1ef12f-4cfc-4cde-b5e3-d8f5c7381a08" />
 
-- Vector store is in-memory (data lost on restart)
-- Local embeddings (not semantic, but works for small docs)
-- Max file size 10MB
-- OCR limited to 5 pages for scanned PDFs
-
----
 
