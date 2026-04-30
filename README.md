@@ -126,4 +126,3 @@ After uploading try asking:
 
 ---
 
-Made for NextBharat Internship Assignment - Jan 2026
