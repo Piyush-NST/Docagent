@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 
 interface Source {
   chunkId: string;
@@ -24,12 +24,20 @@ interface ChatInterfaceProps {
   documentName?: string;
 }
 
+const thinkingMessages = ['Analyzing document...', 'Extracting context...', 'Checking sources...'];
+
 export default function ChatInterface({ documentId, documentName }: ChatInterfaceProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [thinkingIndex, setThinkingIndex] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const promptChips = useMemo(
+    () => ['Summarize this document', 'What are the key findings?', 'List dates and numbers'],
+    [],
+  );
 
   const showToast = (message: string) => {
     setToast(message);
@@ -38,34 +46,47 @@ export default function ChatInterface({ documentId, documentName }: ChatInterfac
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  }, [messages, loading]);
+
+  useEffect(() => {
+    if (!loading) return;
+
+    const interval = window.setInterval(() => {
+      setThinkingIndex((current) => (current + 1) % thinkingMessages.length);
+    }, 1200);
+
+    return () => window.clearInterval(interval);
+  }, [loading]);
 
   useEffect(() => {
     if (documentId && documentName) {
-      setMessages([{
-        id: 'welcome',
-        role: 'assistant',
-        content: `Ready to answer questions about "${documentName}". What would you like to know?`,
-        timestamp: new Date(),
-      }]);
+      setMessages([
+        {
+          id: 'welcome',
+          role: 'assistant',
+          content: `Ready to answer questions about "${documentName}". What would you like to know?`,
+          timestamp: new Date(),
+        },
+      ]);
     } else {
       setMessages([]);
     }
   }, [documentId, documentName]);
 
-  const sendMessage = async () => {
-    if (!input.trim() || !documentId || loading) return;
+  const sendMessage = async (question = input) => {
+    if (!question.trim() || !documentId || loading) return;
 
     const userMsg: Message = {
       id: Date.now().toString(),
       role: 'user',
-      content: input.trim(),
+      content: question.trim(),
       timestamp: new Date(),
     };
 
-    setMessages(prev => [...prev, userMsg]);
+    setMessages((prev) => [...prev, userMsg]);
     setInput('');
     setLoading(true);
+    setThinkingIndex(0);
 
     try {
       const res = await fetch('/api/chat', {
@@ -92,151 +113,174 @@ export default function ChatInterface({ documentId, documentName }: ChatInterfac
         timestamp: new Date(),
       };
 
-      setMessages(prev => [...prev, botMsg]);
+      setMessages((prev) => [...prev, botMsg]);
     } catch (err) {
       console.error('Chat error:', err);
       showToast('Unable to get response. Please try again.');
-      
-      setMessages(prev => [...prev, {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: 'I encountered an issue processing your question. Please try again.',
-        timestamp: new Date(),
-      }]);
+
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: (Date.now() + 1).toString(),
+          role: 'assistant',
+          content: 'I encountered an issue processing your question. Please try again.',
+          timestamp: new Date(),
+        },
+      ]);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
+  const handleKeyPress = (event: React.KeyboardEvent) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
       sendMessage();
     }
   };
 
   if (!documentId) {
     return (
-      <div className="glass-card chat-container">
-        <div className="empty-state">
-          <svg className="empty-state-icon" width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1">
-            <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
-          </svg>
-          <h3>No Document Selected</h3>
-          <p style={{ marginTop: 'var(--spacing-sm)' }}>
-            Upload a document first to start chatting
-          </p>
+      <section className="glass-card chat-container">
+        <div className="chat-header">
+          <div>
+            <span className="eyebrow">Answer Panel</span>
+            <h2>Chat with Document</h2>
+          </div>
+          <span className="status-badge status-warning">Waiting for upload</span>
         </div>
-      </div>
+
+        <div className="empty-state chat-empty">
+          <div className="empty-illustration assistant-illustration">
+            <svg viewBox="0 0 140 140" fill="none">
+              <rect x="26" y="32" width="88" height="64" rx="22" fill="currentColor" opacity="0.12" />
+              <path d="M49 67h42M49 80h26" stroke="currentColor" strokeWidth="5" strokeLinecap="round" opacity="0.55" />
+              <circle cx="48" cy="55" r="6" fill="currentColor" opacity="0.55" />
+              <circle cx="92" cy="55" r="6" fill="currentColor" opacity="0.55" />
+              <path d="M57 99 43 118v-21" fill="currentColor" opacity="0.12" />
+            </svg>
+          </div>
+          <h3>No document selected</h3>
+          <p>Upload or choose a document to start an evidence-backed conversation.</p>
+        </div>
+      </section>
     );
   }
 
   return (
-    <div className="glass-card chat-container">
+    <section className="glass-card chat-container">
       {toast && (
-        <div
-          style={{
-            position: 'fixed',
-            top: '20px',
-            right: '20px',
-            padding: 'var(--spacing-md) var(--spacing-lg)',
-            borderRadius: 'var(--radius-lg)',
-            background: 'linear-gradient(135deg, rgba(239, 68, 68, 0.95), rgba(185, 28, 28, 0.95))',
-            color: 'white',
-            boxShadow: '0 10px 40px rgba(0, 0, 0, 0.3)',
-            zIndex: 1000,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 'var(--spacing-sm)',
-            animation: 'slideIn 0.3s ease-out',
-          }}
-        >
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <div className="toast toast-error">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <circle cx="12" cy="12" r="10" />
-            <line x1="12" y1="8" x2="12" y2="12" />
-            <line x1="12" y1="16" x2="12.01" y2="16" />
+            <path d="M12 8v4" />
+            <path d="M12 16h.01" />
           </svg>
-          <span style={{ fontSize: '0.9rem' }}>{toast}</span>
+          <span>{toast}</span>
         </div>
       )}
 
-      <div style={{ 
-        padding: 'var(--spacing-md)', 
-        borderBottom: '1px solid var(--border-color)',
-        marginBottom: 'var(--spacing-md)'
-      }}>
-        <h3 style={{ color: 'var(--text-primary)' }}>Chat with Document</h3>
-        <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>
-          Chatting about: {documentName}
-        </p>
+      <div className="chat-header">
+        <div>
+          <span className="eyebrow">Answer Panel</span>
+          <h2>Chat with Document</h2>
+          <p>{documentName}</p>
+        </div>
+        <span className="status-badge status-success">
+          <span className="status-dot" />
+          Grounded
+        </span>
       </div>
 
       <div className="chat-messages">
         {messages.map((msg) => (
-          <div key={msg.id} className={`message message-${msg.role}`}>
-            <div className="message-content">{msg.content}</div>
-            
-            {msg.sources && msg.sources.length > 0 && (
-              <div className="sources">
-                <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: 'var(--spacing-sm)' }}>
-                  Sources:
-                </p>
-                <div>
-                  {msg.sources.map((source, idx) => (
-                    <span key={source.chunkId} className="source-tag">
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
-                        <polyline points="14 2 14 8 20 8" />
-                      </svg>
-                      {source.page ? `Page ${source.page}` : `Source ${idx + 1}`}
-                      {source.section && source.section !== `Chunk ${idx + 1}` && (
-                        <span style={{ opacity: 0.7 }}> - {source.section.substring(0, 20)}</span>
-                      )}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        ))}
-        
-        {loading && (
-          <div className="message message-assistant">
-            <div className="loading-dots">
-              <span></span>
-              <span></span>
-              <span></span>
+          <article key={msg.id} className={`message-row message-${msg.role}`}>
+            <div className="message-avatar">
+              {msg.role === 'assistant' ? (
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                  <path d="M12 3 4 7v6c0 5 3.4 7.7 8 8 4.6-.3 8-3 8-8V7z" />
+                  <path d="M9 12h6" />
+                  <path d="M12 9v6" />
+                </svg>
+              ) : (
+                <span>You</span>
+              )}
             </div>
-          </div>
+            <div className="message-bubble">
+              <div className="message-content">{msg.content}</div>
+
+              {msg.sources && msg.sources.length > 0 && (
+                <div className="sources">
+                  <p>Sources</p>
+                  <div>
+                    {msg.sources.map((source, idx) => (
+                      <span key={source.chunkId} className="source-tag">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                          <path d="M14 2v6h6" />
+                        </svg>
+                        {source.page ? `Page ${source.page}` : `Source ${idx + 1}`}
+                        {source.section && source.section !== `Chunk ${idx + 1}` && (
+                          <span>{source.section.substring(0, 22)}</span>
+                        )}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </article>
+        ))}
+
+        {loading && (
+          <article className="message-row message-assistant">
+            <div className="message-avatar">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                <path d="M12 3 4 7v6c0 5 3.4 7.7 8 8 4.6-.3 8-3 8-8V7z" />
+              </svg>
+            </div>
+            <div className="message-bubble thinking-bubble">
+              <div className="loading-dots">
+                <span />
+                <span />
+                <span />
+              </div>
+              <p>{thinkingMessages[thinkingIndex]}</p>
+            </div>
+          </article>
         )}
-        
+
         <div ref={messagesEndRef} />
+      </div>
+
+      <div className="prompt-chip-row">
+        {promptChips.map((chip) => (
+          <button type="button" key={chip} onClick={() => sendMessage(chip)} disabled={loading}>
+            {chip}
+          </button>
+        ))}
       </div>
 
       <div className="chat-input-container">
         <input
           type="text"
-          placeholder="Ask something about the document..."
+          placeholder="Ask anything grounded in this document..."
           value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyPress={handleKeyPress}
+          onChange={(event) => setInput(event.target.value)}
+          onKeyDown={handleKeyPress}
           disabled={loading}
         />
-        <button 
-          className="btn btn-primary" 
-          onClick={sendMessage}
-          disabled={loading || !input.trim()}
-        >
+        <button className="btn btn-primary icon-btn" onClick={() => sendMessage()} disabled={loading || !input.trim()}>
           {loading ? (
-            <div className="loading-spinner" style={{ width: '16px', height: '16px' }}></div>
+            <div className="loading-spinner small-spinner" />
           ) : (
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <line x1="22" y1="2" x2="11" y2="13" />
-              <polygon points="22 2 15 22 11 13 2 9 22 2" />
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="m22 2-7 20-4-9-9-4z" />
+              <path d="M22 2 11 13" />
             </svg>
           )}
         </button>
       </div>
-    </div>
+    </section>
   );
 }

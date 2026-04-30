@@ -19,39 +19,33 @@ interface DocumentListProps {
 
 function getIcon(fileType?: string) {
   if (fileType?.includes('pdf')) {
-    return (
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
-        <polyline points="14 2 14 8 20 8" />
-        <line x1="16" y1="13" x2="8" y2="13" />
-        <line x1="16" y1="17" x2="8" y2="17" />
-      </svg>
-    );
+    return 'PDF';
   }
+
   if (fileType?.includes('word') || fileType?.includes('docx')) {
-    return (
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
-        <polyline points="14 2 14 8 20 8" />
-      </svg>
-    );
+    return 'DOC';
   }
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-      <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
-      <polyline points="14 2 14 8 20 8" />
-    </svg>
-  );
+
+  if (fileType?.includes('image')) {
+    return 'IMG';
+  }
+
+  return 'DOC';
 }
 
-export default function DocumentList({ documents, selectedDocumentId, onSelectDocument, onDeleteDocument }: DocumentListProps) {
+export default function DocumentList({
+  documents,
+  selectedDocumentId,
+  onSelectDocument,
+  onDeleteDocument,
+}: DocumentListProps) {
   const [deleting, setDeleting] = useState<string | null>(null);
 
-  const handleDelete = async (e: React.MouseEvent, docId: string) => {
-    e.stopPropagation();
-    
+  const handleDelete = async (event: React.MouseEvent<HTMLButtonElement>, docId: string) => {
+    event.stopPropagation();
+
     if (deleting) return;
-    
+
     setDeleting(docId);
     try {
       await onDeleteDocument(docId);
@@ -60,77 +54,74 @@ export default function DocumentList({ documents, selectedDocumentId, onSelectDo
     }
   };
 
-  if (documents.length === 0) {
-    return (
-      <div className="glass-card">
-        <h2 style={{ marginBottom: 'var(--spacing-md)' }}>Documents</h2>
-        <div className="empty-state" style={{ padding: 'var(--spacing-lg)' }}>
-          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" style={{ opacity: 0.5, marginBottom: 'var(--spacing-md)' }}>
-            <path d="M13 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V9z" />
-            <polyline points="13 2 13 9 20 9" />
-          </svg>
-          <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
-            No documents yet
-          </p>
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <div className="glass-card">
-      <h2 style={{ marginBottom: 'var(--spacing-md)' }}>Documents</h2>
-      <div className="document-list">
-        {documents.map((doc) => (
-          <div
-            key={doc.documentId}
-            className={`document-item ${selectedDocumentId === doc.documentId ? 'active' : ''}`}
-            onClick={() => onSelectDocument(doc)}
-          >
-            <div className="document-icon">
-              {getIcon(doc.fileType)}
-            </div>
-            <div className="document-info">
-              <div className="document-name">{doc.fileName}</div>
-              <div className="document-meta">
-                {doc.chunkCount} chunks
-              </div>
-            </div>
-            {selectedDocumentId === doc.documentId && (
-              <div className="status-badge status-success" style={{ marginRight: 'var(--spacing-sm)' }}>
-                Active
-              </div>
-            )}
-            <button
-              className="delete-btn"
-              onClick={(e) => handleDelete(e, doc.documentId)}
-              disabled={deleting === doc.documentId}
-              title="Delete"
-              style={{
-                padding: 'var(--spacing-xs)',
-                background: 'transparent',
-                border: '1px solid var(--border-color)',
-                borderRadius: 'var(--radius-sm)',
-                cursor: 'pointer',
-                color: 'var(--text-muted)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                opacity: deleting === doc.documentId ? 0.5 : 1,
-              }}
-            >
-              {deleting === doc.documentId ? (
-                <div className="loading-spinner" style={{ width: '14px', height: '14px' }}></div>
-              ) : (
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <polyline points="3 6 5 6 21 6" />
-                  <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
-                </svg>
-              )}
-            </button>
-          </div>
-        ))}
+    <section className="glass-card documents-card">
+      <div className="section-heading section-heading-row">
+        <div>
+          <span className="eyebrow">Library</span>
+          <h2>Documents</h2>
+        </div>
+        <span className="doc-count">{documents.length}</span>
       </div>
-    </div>
+
+      {documents.length === 0 ? (
+        <div className="empty-state compact-empty">
+          <div className="empty-illustration">
+            <svg viewBox="0 0 120 120" fill="none">
+              <rect x="31" y="18" width="50" height="68" rx="10" fill="currentColor" opacity="0.12" />
+              <path d="M70 18v18h18" stroke="currentColor" strokeWidth="4" opacity="0.5" />
+              <rect x="18" y="55" width="56" height="44" rx="12" fill="currentColor" opacity="0.18" />
+              <path d="M31 73h30M31 84h19" stroke="currentColor" strokeWidth="4" strokeLinecap="round" opacity="0.6" />
+            </svg>
+          </div>
+          <h3>No documents yet</h3>
+          <p>Upload a file to create a grounded chat workspace.</p>
+        </div>
+      ) : (
+        <div className="document-list">
+          {documents.map((doc) => {
+            const isActive = selectedDocumentId === doc.documentId;
+
+            return (
+              <div
+                key={doc.documentId}
+                className={`document-item ${isActive ? 'active' : ''}`}
+                onClick={() => onSelectDocument(doc)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    onSelectDocument(doc);
+                  }
+                }}
+                role="button"
+                tabIndex={0}
+              >
+                <span className="document-icon">{getIcon(doc.fileType)}</span>
+                <span className="document-info">
+                  <span className="document-name">{doc.fileName}</span>
+                  <span className="document-meta">{doc.chunkCount} indexed chunks</span>
+                </span>
+                {isActive && <span className="active-dot" aria-label="Selected document" />}
+                <button
+                  type="button"
+                  className="delete-btn"
+                  onClick={(event) => handleDelete(event, doc.documentId)}
+                  aria-label={`Delete ${doc.fileName}`}
+                >
+                  {deleting === doc.documentId ? (
+                    <span className="loading-spinner small-spinner" />
+                  ) : (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M3 6h18" />
+                      <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+                    </svg>
+                  )}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </section>
   );
 }
