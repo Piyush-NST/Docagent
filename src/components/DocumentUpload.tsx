@@ -1,6 +1,14 @@
 'use client';
 
 import React, { useCallback, useState } from 'react';
+import UploadToastNotice from './UploadToastNotice';
+import {
+  MAX_UPLOAD_BYTES,
+  MAX_UPLOAD_LABEL,
+  SUPPORTED_UPLOAD_LABEL,
+  buildOversizedFileMessage,
+  formatBytes,
+} from '@/lib/upload-limits';
 
 interface UploadedDocument {
   documentId: string;
@@ -19,6 +27,15 @@ interface DocumentUploadProps {
   onDocumentUploaded: (doc: UploadedDocument) => void;
 }
 
+interface UploadToast {
+  type: 'success' | 'error';
+  title: string;
+  message: string;
+  details?: string;
+  fileSizeLabel?: string;
+  limitLabel?: string;
+}
+
 const loadingMessages = [
   'Uploading document...',
   'Analyzing document...',
@@ -26,11 +43,11 @@ const loadingMessages = [
   'Preparing grounded answers...',
 ];
 
-function getUserFriendlyError(error: string): string {
+function getUserFriendlyError(error: string): UploadToast {
   const errorMap: Record<string, string> = {
     'No text in document': 'Could not extract text from this file. Please try a different document.',
     'No text found': 'No readable text found in this image. Please try a clearer image.',
-    Unsupported: 'This file type is not supported. Please upload PDF, DOCX, or image files.',
+    Unsupported: `This file type is not supported. Please upload ${SUPPORTED_UPLOAD_LABEL} files.`,
     GROQ_API_KEY: 'Service temporarily unavailable. Please try again later.',
     GEMINI_API_KEY: 'Service temporarily unavailable. Please try again later.',
     OPENAI_API_KEY: 'Service temporarily unavailable. Please try again later.',
@@ -41,7 +58,8 @@ function getUserFriendlyError(error: string): string {
     '503': 'Service temporarily unavailable. Please try again later.',
     network: 'Network error. Please check your connection.',
     timeout: 'Request timed out. Please try again.',
-    'File too large': 'File is too large. Maximum size is 10MB.',
+    FILE_TOO_LARGE: `This file is above the ${MAX_UPLOAD_LABEL} processing limit.`,
+    'File too large': `This file is above the ${MAX_UPLOAD_LABEL} processing limit.`,
     'extract text': 'Could not read this document. Please try a different file.',
   };
 
@@ -49,22 +67,34 @@ function getUserFriendlyError(error: string): string {
 
   for (const [key, message] of Object.entries(errorMap)) {
     if (lowerError.includes(key.toLowerCase())) {
-      return message;
+      return {
+        type: 'error',
+        title: key.toLowerCase().includes('large') || key === 'FILE_TOO_LARGE' ? 'Upload limit reached' : 'Upload failed',
+        message,
+        details: `Supported uploads: ${SUPPORTED_UPLOAD_LABEL}, up to ${MAX_UPLOAD_LABEL}.`,
+        limitLabel: MAX_UPLOAD_LABEL,
+      };
     }
   }
 
-  return 'Something went wrong. Please try again with a different file.';
+  return {
+    type: 'error',
+    title: 'Upload failed',
+    message: 'Something went wrong. Please try again with a different file.',
+    details: `Supported uploads: ${SUPPORTED_UPLOAD_LABEL}, up to ${MAX_UPLOAD_LABEL}.`,
+    limitLabel: MAX_UPLOAD_LABEL,
+  };
 }
 
 export default function DocumentUpload({ onDocumentUploaded }: DocumentUploadProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
-  const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [toast, setToast] = useState<UploadToast | null>(null);
   const [status, setStatus] = useState(loadingMessages[0]);
 
-  const showToast = (type: 'success' | 'error', message: string) => {
-    setToast({ type, message });
-    setTimeout(() => setToast(null), 4200);
+  const showToast = (nextToast: UploadToast) => {
+    setToast(nextToast);
+    setTimeout(() => setToast(null), nextToast.type === 'error' ? 7200 : 4200);
   };
 
   const handleDragOver = useCallback((event: React.DragEvent) => {
@@ -78,8 +108,15 @@ export default function DocumentUpload({ onDocumentUploaded }: DocumentUploadPro
   }, []);
 
   const uploadFile = async (file: File) => {
-    if (file.size > 10 * 1024 * 1024) {
-      showToast('error', 'File is too large. Maximum size is 10MB.');
+    if (file.size > MAX_UPLOAD_BYTES) {
+      showToast({
+        type: 'error',
+        title: 'Upload limit reached',
+        message: buildOversizedFileMessage(file.name, file.size),
+        details: 'Smaller files are processed more reliably during OCR and chunking.',
+        fileSizeLabel: formatBytes(file.size),
+        limitLabel: MAX_UPLOAD_LABEL,
+      });
       return;
     }
 
@@ -102,16 +139,32 @@ export default function DocumentUpload({ onDocumentUploaded }: DocumentUploadPro
       const data = await res.json();
 
       if (!res.ok) {
+        if (data.error === 'FILE_TOO_LARGE') {
+          showToast({
+            type: 'error',
+            title: 'Upload limit reached',
+            message: data.message || buildOversizedFileMessage(file.name, file.size),
+            details: 'Smaller files are processed more reliably during OCR and chunking.',
+            fileSizeLabel: data.actualSizeLabel || formatBytes(file.size),
+            limitLabel: data.maxSize || MAX_UPLOAD_LABEL,
+          });
+          return;
+        }
+
         throw new Error(data.message || data.error || 'Upload failed');
       }
 
       setStatus(loadingMessages[3]);
-      showToast('success', `"${file.name}" is ready to chat.`);
+      showToast({
+        type: 'success',
+        title: 'Document ready',
+        message: `"${file.name}" is indexed and ready to chat.`,
+      });
       onDocumentUploaded(data);
     } catch (err) {
       console.error('Upload error:', err);
       const errorMsg = err instanceof Error ? err.message : 'Upload failed';
-      showToast('error', getUserFriendlyError(errorMsg));
+      showToast(getUserFriendlyError(errorMsg));
     } finally {
       setIsUploading(false);
     }
@@ -135,26 +188,15 @@ export default function DocumentUpload({ onDocumentUploaded }: DocumentUploadPro
   return (
     <section className="glass-card upload-card">
       {toast && (
-        <div className={`toast toast-${toast.type}`}>
-          {toast.type === 'success' ? (
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="m20 6-11 11-5-5" />
-            </svg>
-          ) : (
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <circle cx="12" cy="12" r="10" />
-              <path d="M12 8v4" />
-              <path d="M12 16h.01" />
-            </svg>
-          )}
-          <span>{toast.message}</span>
-          <button type="button" onClick={() => setToast(null)} aria-label="Dismiss notification">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M18 6 6 18" />
-              <path d="m6 6 12 12" />
-            </svg>
-          </button>
-        </div>
+        <UploadToastNotice
+          type={toast.type}
+          title={toast.title}
+          message={toast.message}
+          details={toast.details}
+          fileSizeLabel={toast.fileSizeLabel}
+          limitLabel={toast.limitLabel}
+          onDismiss={() => setToast(null)}
+        />
       )}
 
       <div className="section-heading">
@@ -207,7 +249,7 @@ export default function DocumentUpload({ onDocumentUploaded }: DocumentUploadPro
         ) : (
           <div className="upload-copy">
             <strong>Drop files here</strong>
-            <span>PDF, DOCX, PNG, JPG up to 10MB</span>
+            <span>{SUPPORTED_UPLOAD_LABEL} up to {MAX_UPLOAD_LABEL}</span>
             <button type="button" className="btn btn-secondary" tabIndex={-1}>
               Browse Files
             </button>

@@ -48,7 +48,7 @@ export async function POST(request: NextRequest) {
     if (relevantChunks.length === 0) {
       return NextResponse.json({
         success: true,
-        answer: 'I could not find any content in this document. Please try re-uploading the file.',
+        answer: 'I could not find searchable content for this document in the current workspace. The upload may not have produced readable text or the in-memory index may have been reset. Please re-upload the file, then ask again with a page, heading, date, or keyword from the document.',
         sources: [],
         isGrounded: false,
         documentId,

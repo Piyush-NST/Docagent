@@ -45,6 +45,10 @@ export interface GroundedResponse {
   isGrounded: boolean;
 }
 
+const notFoundAnswer = `I could not find a grounded answer to that question in the indexed document content.
+
+I searched the retrieved passages, but they do not mention the requested detail clearly enough to answer without guessing. Try asking with a specific page, heading, date, name, or keyword from the document.`;
+
 // generates answer from the relevant chunks
 export async function generateGroundedResponse(
   question: string,
@@ -68,7 +72,7 @@ export async function generateGroundedResponse(
 
   if (retrievedChunks.length === 0) {
     return {
-      answer: 'I could not find relevant information in the document.',
+      answer: notFoundAnswer,
       sources: [],
       isGrounded: false,
     };
@@ -87,7 +91,8 @@ export async function generateGroundedResponse(
 
 Rules:
 1. Only use info from the context - dont make stuff up
-2. If answer not in context, say "I could not find this in the document"
+2. If answer is not clearly present in the context, use this exact response:
+${notFoundAnswer}
 3. Cite sources like [Source 1] or [Source 2, Page 3]
 4. Be concise
 
@@ -110,7 +115,8 @@ Question: ${question}`;
   const answer = response.choices[0]?.message?.content || 'Could not generate response.';
   console.log('[Groq] Response generated');
 
-  const isGrounded = !answer.toLowerCase().includes('could not find');
+  const lowerAnswer = answer.toLowerCase();
+  const isGrounded = !lowerAnswer.includes('could not find') && !lowerAnswer.includes('without guessing');
 
   return {
     answer,

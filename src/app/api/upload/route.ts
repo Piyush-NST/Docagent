@@ -4,21 +4,34 @@ import { NextRequest, NextResponse } from 'next/server';
 import { uploadDocument, ensureContainerExists } from '@/lib/azure-blob';
 import { processDocument } from '@/lib/document-processor';
 import { storeDocumentChunks } from '@/lib/vector-store';
-
-const ALLOWED_TYPES = [
-  'application/pdf',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  'application/msword',
-  'image/png',
-  'image/jpeg',
-  'image/jpg',
-];
-
-const MAX_SIZE = 10 * 1024 * 1024; // 10mb
+import {
+  MAX_UPLOAD_BYTES,
+  MAX_UPLOAD_LABEL,
+  REQUEST_BODY_HARD_LIMIT_BYTES,
+  SUPPORTED_UPLOAD_LABEL,
+  SUPPORTED_UPLOAD_TYPES,
+  buildOversizedFileMessage,
+  formatBytes,
+} from '@/lib/upload-limits';
 
 export async function POST(request: NextRequest) {
   try {
     await ensureContainerExists();
+
+    const contentLength = Number(request.headers.get('content-length') || 0);
+    if (contentLength > REQUEST_BODY_HARD_LIMIT_BYTES) {
+      return NextResponse.json(
+        {
+          error: 'FILE_TOO_LARGE',
+          message: `This upload is ${formatBytes(contentLength)} including form data, which is above the ${MAX_UPLOAD_LABEL} document processing limit.`,
+          maxSize: MAX_UPLOAD_LABEL,
+          maxBytes: MAX_UPLOAD_BYTES,
+          actualSize: contentLength,
+          guidance: 'Compress the file, split it into smaller documents, or upload only the pages you want to ask about.',
+        },
+        { status: 413 }
+      );
+    }
 
     const formData = await request.formData();
     const file = formData.get('file') as File | null;
@@ -27,23 +40,28 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'No file uploaded' }, { status: 400 });
     }
 
-    if (!ALLOWED_TYPES.includes(file.type)) {
+    if (!SUPPORTED_UPLOAD_TYPES.includes(file.type as (typeof SUPPORTED_UPLOAD_TYPES)[number])) {
       return NextResponse.json(
         { 
           error: 'File type not supported',
-          message: 'Please upload PDF, DOCX, PNG, or JPG files',
+          message: `Please upload ${SUPPORTED_UPLOAD_LABEL} files.`,
         },
         { status: 400 }
       );
     }
 
-    if (file.size > MAX_SIZE) {
+    if (file.size > MAX_UPLOAD_BYTES) {
       return NextResponse.json(
         { 
-          error: 'File too big',
-          message: 'Max file size is 10MB',
+          error: 'FILE_TOO_LARGE',
+          message: buildOversizedFileMessage(file.name, file.size),
+          maxSize: MAX_UPLOAD_LABEL,
+          maxBytes: MAX_UPLOAD_BYTES,
+          actualSize: file.size,
+          actualSizeLabel: formatBytes(file.size),
+          guidance: 'This project extracts and stores document text in memory during upload, so smaller files keep processing reliable.',
         },
-        { status: 400 }
+        { status: 413 }
       );
     }
 
@@ -97,6 +115,6 @@ export async function GET() {
   return NextResponse.json({
     message: 'Upload API',
     supportedTypes: ['PDF', 'DOCX', 'PNG', 'JPG'],
-    maxSize: '10MB',
+    maxSize: MAX_UPLOAD_LABEL,
   });
 }
