@@ -30,5 +30,5 @@ export function formatBytes(bytes: number): string {
 }
 
 export function buildOversizedFileMessage(_fileName: string, fileSize: number): string {
-  return `Your file is ${formatBytes(fileSize)}. This workspace supports files up to ${MAX_UPLOAD_LABEL}. Try compressing the PDF, splitting it, or uploading selected pages.`;
+  return `This file is ${formatBytes(fileSize)}. This workspace supports files up to ${MAX_UPLOAD_LABEL}. Try compressing the PDF, splitting it, or uploading selected pages.`;
 }

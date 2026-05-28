@@ -1,3 +1,5 @@
+@import "tailwindcss";
+
 :root {
   --bg-primary: #070711;
   --bg-card: rgba(18, 18, 36, 0.66);
@@ -22,45 +24,47 @@
   --transition: 180ms ease;
 }
 
-*,
-*::before,
-*::after {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
-}
+@layer base {
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
 
-html {
-  scroll-behavior: smooth;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
+  html {
+    scroll-behavior: smooth;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
 
-body {
-  min-height: 100vh;
-  background: var(--bg-primary);
-  color: var(--text-primary);
-  font-family: var(--font-inter), Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  line-height: 1.5;
-}
+  body {
+    min-height: 100vh;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: var(--font-inter), Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    line-height: 1.5;
+  }
 
-button,
-input {
-  font: inherit;
-}
+  button,
+  input {
+    font: inherit;
+  }
 
-button {
-  border: 0;
-}
+  button {
+    border: 0;
+  }
 
-svg {
-  width: 1.25rem;
-  height: 1.25rem;
+  svg {
+    width: 1.25rem;
+    height: 1.25rem;
+  }
 }
 
 .app-root {
   min-height: 100vh;
-  overflow: hidden;
+  overflow-x: hidden;
   background:
     radial-gradient(circle at 18% 8%, rgba(124, 58, 237, 0.26), transparent 28rem),
     radial-gradient(circle at 86% 20%, rgba(56, 189, 248, 0.16), transparent 24rem),
@@ -173,37 +177,39 @@ svg {
   font-weight: 800;
 }
 
-h1,
-h2,
-h3 {
-  line-height: 1.05;
-  letter-spacing: 0;
-}
+@layer base {
+  h1,
+  h2,
+  h3 {
+    line-height: 1.05;
+    letter-spacing: 0;
+  }
 
-h1 {
-  max-width: 760px;
-  font-size: clamp(3.2rem, 8vw, 7.2rem);
-  font-weight: 800;
-  background: linear-gradient(135deg, #fff 0%, #ddd6fe 44%, #7dd3fc 100%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-}
+  h1 {
+    max-width: 760px;
+    font-size: clamp(3.2rem, 8vw, 7.2rem);
+    font-weight: 800;
+    background: linear-gradient(135deg, #fff 0%, #ddd6fe 44%, #7dd3fc 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
 
-h2 {
-  color: var(--text-primary);
-  font-size: 1.25rem;
-  font-weight: 750;
-}
+  h2 {
+    color: var(--text-primary);
+    font-size: 1.25rem;
+    font-weight: 750;
+  }
 
-h3 {
-  color: var(--text-primary);
-  font-size: 1rem;
-  font-weight: 700;
-}
+  h3 {
+    color: var(--text-primary);
+    font-size: 1rem;
+    font-weight: 700;
+  }
 
-p {
-  color: var(--text-secondary);
+  p {
+    color: var(--text-secondary);
+  }
 }
 
 .hero-copy > p {
@@ -452,6 +458,46 @@ p {
   margin-top: 6px;
   color: white;
   font-size: 1rem;
+}
+
+.landing-feature-grid {
+  position: relative;
+  z-index: 1;
+  margin-top: 22px;
+}
+
+.workspace-page-header {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 28px;
+  padding: 34px 0 24px;
+}
+
+.workspace-page-header h1 {
+  max-width: 760px;
+  margin-top: 10px;
+  color: var(--text-primary);
+  font-size: clamp(2.3rem, 5vw, 4.6rem);
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.workspace-page-header p {
+  max-width: 720px;
+  margin-top: 14px;
+  color: var(--text-secondary);
+  font-size: 1.05rem;
+}
+
+.workspace-header-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 12px;
 }
 
 .workspace-grid {
@@ -1207,6 +1253,161 @@ p {
   height: 14px;
 }
 
+.upload-modal-backdrop {
+  position: fixed;
+  z-index: 9999;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  width: 100vw;
+  min-height: 100vh;
+  padding: 24px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  background:
+    radial-gradient(circle at 50% 42%, rgba(56, 189, 248, 0.12), transparent 34rem),
+    rgba(2, 6, 23, 0.62);
+  backdrop-filter: blur(14px) saturate(1.18);
+  animation: modalBackdropIn 180ms ease both;
+}
+
+.upload-limit-modal {
+  position: relative;
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: 14px;
+  width: min(520px, 100%);
+  max-width: calc(100vw - 32px);
+  padding: 22px 22px 20px;
+  border: 1px solid transparent;
+  border-radius: 24px;
+  color: #f8fafc;
+  background:
+    linear-gradient(135deg, rgba(7, 12, 28, 0.96), rgba(22, 18, 42, 0.94)) padding-box,
+    linear-gradient(135deg, rgba(248, 113, 113, 0.62), rgba(167, 139, 250, 0.46), rgba(56, 189, 248, 0.34)) border-box;
+  box-shadow:
+    0 30px 100px rgba(0, 0, 0, 0.5),
+    0 0 60px rgba(139, 92, 246, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(24px) saturate(1.2);
+  animation: modalCardIn 240ms cubic-bezier(0.2, 0.86, 0.2, 1) both;
+}
+
+.upload-limit-modal::before {
+  content: "";
+  position: absolute;
+  inset: 1px;
+  pointer-events: none;
+  border-radius: 23px;
+  background:
+    radial-gradient(circle at 10% 0%, rgba(248, 113, 113, 0.16), transparent 38%),
+    radial-gradient(circle at 96% 0%, rgba(56, 189, 248, 0.14), transparent 42%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), transparent 48%);
+}
+
+.upload-limit-icon {
+  position: relative;
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  border: 1px solid rgba(248, 113, 113, 0.34);
+  border-radius: 999px;
+  background: rgba(127, 29, 29, 0.22);
+  color: #fecaca;
+  box-shadow: 0 0 28px rgba(248, 113, 113, 0.18);
+}
+
+.upload-limit-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.upload-limit-content {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  gap: 12px;
+  padding-right: 34px;
+}
+
+.upload-limit-content strong {
+  color: #ffffff;
+  font-size: 1.05rem;
+  font-weight: 850;
+  line-height: 1.2;
+  letter-spacing: 0;
+}
+
+.upload-limit-content p {
+  max-width: 62ch;
+  color: rgba(226, 232, 240, 0.9);
+  font-size: 0.94rem;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.upload-limit-content small {
+  color: rgba(203, 213, 225, 0.7);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.upload-limit-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.upload-limit-chips span {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.065);
+  color: rgba(226, 232, 240, 0.78);
+  font-size: 0.8rem;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.upload-limit-chips b {
+  color: #fecaca;
+  font-weight: 850;
+}
+
+.upload-limit-close {
+  position: absolute;
+  z-index: 2;
+  top: 14px;
+  right: 14px;
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+  color: rgba(226, 232, 240, 0.78);
+  cursor: pointer;
+  transition: background var(--transition), border-color var(--transition), color var(--transition), transform var(--transition);
+}
+
+.upload-limit-close:hover {
+  border-color: rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.13);
+  color: #ffffff;
+  transform: scale(1.04);
+}
+
+.upload-limit-close svg {
+  width: 16px;
+  height: 16px;
+}
+
 .loading-spinner {
   width: 24px;
   height: 24px;
@@ -1304,6 +1505,26 @@ p {
   }
 }
 
+@keyframes modalBackdropIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes modalCardIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 @keyframes rise {
   from {
     opacity: 0;
@@ -1362,6 +1583,16 @@ p {
   .workspace-grid {
     grid-template-columns: 1fr;
   }
+
+  .workspace-page-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .workspace-header-actions {
+    justify-content: flex-start;
+  }
+
 }
 
 @media (max-width: 760px) {
@@ -1389,6 +1620,19 @@ p {
 
   .hero-visual {
     min-height: 320px;
+  }
+
+  .workspace-page-header {
+    gap: 18px;
+    padding-top: 24px;
+  }
+
+  .workspace-page-header h1 {
+    font-size: clamp(2rem, 13vw, 3.2rem);
+  }
+
+  .workspace-header-actions {
+    width: 100%;
   }
 
   .visual-stage {
@@ -1446,5 +1690,42 @@ p {
 
   .premium-toast-content p {
     font-size: 0.82rem;
+  }
+
+  .upload-modal-backdrop {
+    align-items: center;
+    padding: 16px;
+  }
+
+  .upload-limit-modal {
+    grid-template-columns: 1fr;
+    gap: 14px;
+    width: 100%;
+    max-width: calc(100vw - 32px);
+    padding: 18px;
+    border-radius: 20px;
+  }
+
+  .upload-limit-modal::before {
+    border-radius: 19px;
+  }
+
+  .upload-limit-content {
+    padding-right: 0;
+  }
+
+  .upload-limit-content strong {
+    padding-right: 42px;
+    font-size: 1rem;
+  }
+
+  .upload-limit-content p {
+    font-size: 0.9rem;
+    line-height: 1.58;
+  }
+
+  .upload-limit-close {
+    top: 12px;
+    right: 12px;
   }
 }

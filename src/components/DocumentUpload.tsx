@@ -69,9 +69,9 @@ function getUserFriendlyError(error: string): UploadToast {
     if (lowerError.includes(key.toLowerCase())) {
       return {
         type: 'error',
-        title: key.toLowerCase().includes('large') || key === 'FILE_TOO_LARGE' ? 'Upload limit reached' : 'Upload failed',
+        title: key.toLowerCase().includes('large') || key === 'FILE_TOO_LARGE' ? 'File limit reached' : 'Upload failed',
         message,
-        details: `Supported uploads: ${SUPPORTED_UPLOAD_LABEL}, up to ${MAX_UPLOAD_LABEL}.`,
+        details: key.toLowerCase().includes('large') || key === 'FILE_TOO_LARGE' ? undefined : `Supported uploads: ${SUPPORTED_UPLOAD_LABEL}, up to ${MAX_UPLOAD_LABEL}.`,
         limitLabel: MAX_UPLOAD_LABEL,
       };
     }
@@ -111,9 +111,8 @@ export default function DocumentUpload({ onDocumentUploaded }: DocumentUploadPro
     if (file.size > MAX_UPLOAD_BYTES) {
       showToast({
         type: 'error',
-        title: 'Upload limit reached',
+        title: 'File limit reached',
         message: buildOversizedFileMessage(file.name, file.size),
-        details: 'Smaller files are processed more reliably during OCR and chunking.',
         fileSizeLabel: formatBytes(file.size),
         limitLabel: MAX_UPLOAD_LABEL,
       });
@@ -142,9 +141,8 @@ export default function DocumentUpload({ onDocumentUploaded }: DocumentUploadPro
         if (data.error === 'FILE_TOO_LARGE') {
           showToast({
             type: 'error',
-            title: 'Upload limit reached',
+            title: 'File limit reached',
             message: data.message || buildOversizedFileMessage(file.name, file.size),
-            details: 'Smaller files are processed more reliably during OCR and chunking.',
             fileSizeLabel: data.actualSizeLabel || formatBytes(file.size),
             limitLabel: data.maxSize || MAX_UPLOAD_LABEL,
           });
