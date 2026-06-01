@@ -70,7 +70,7 @@ User uploads a document. Gets stored in memory and assigned a unique ID.
 
 ### 3. Chunking & Embedding
 
-Text is split into ~500 character chunks with overlap. Each chunk gets a local hash-based embedding (since Groq doesn't have embedding API).
+Text is splitted into ~500 character chunks with overlap. Each chunk gets a local hash-based embedding (since Groq doesn't have embedding API).
 
 ### 4. Question Answering
 
