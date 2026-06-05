@@ -15,7 +15,7 @@ User --> [Next.js Frontend] --> [API Routes]
                     +---------------+---------------+
                     |               |               |
                     v               v               v
-             [In-Memory Store]  [Vector Store]    [Groq LLM]
+             [In-Memory Store]  [Vector Store]    [Gemini LLM]
              (document files)   (chunks + embed)  (chat responses)
                                     |
                                     v
@@ -35,13 +35,13 @@ User --> [Next.js Frontend] --> [API Routes]
 ### API Routes
 
 - **/api/upload**: Receives file, extracts text, chunks it, stores embeddings
-- **/api/chat**: Takes question, finds relevant chunks, calls Groq, returns answer
+- **/api/chat**: Takes question, finds relevant chunks, calls Gemini, returns answer
 - **/api/documents**: List all docs or delete a doc
 
 ### Libraries
 
 - **azure-blob.ts**: Storage layer. Uses in-memory Map by default. Can switch to Azure Blob if connection string provided.
-- **azure-openai.ts**: AI client. Uses Groq for chat completions. Has local hash-based embedding since Groq doesn't have embedding API.
+- **azure-openai.ts**: AI client. Uses Gemini for chat responses (`GEMINI_MODEL`, default `gemini-2.0-flash`) and local hash-based embeddings for lightweight retrieval.
 - **document-processor.ts**: Extracts text from PDF (unpdf), DOCX (mammoth), images (Gemini Vision OCR). Chunks text into ~500 char pieces.
 - **vector-store.ts**: Stores chunks with embeddings in memory. Does similarity search to find relevant chunks.
 
@@ -66,23 +66,17 @@ User --> [Next.js Frontend] --> [API Routes]
 2. Search vector store for relevant chunks (top 5)
 3. If small document, just use all chunks
 4. Build prompt with chunks as context
-5. Call Groq with grounding instructions
+5. Call Gemini with grounding instructions
 6. Return answer + source references
 
 ## Why These Choices
 
-### Why Groq?
-- Free tier available
-- Very fast inference
-- Good model (llama-3.3-70b)
-
-### Why Gemini for OCR?
+### Why Gemini?
 - Free tier
-- Good vision model
-- Groq deprecated their vision model
+- Good text and vision models
+- One provider supports both grounded answers and OCR fallback
 
 ### Why local embeddings?
-- Groq doesn't have embedding API
 - Hash-based method works ok for small docs
 - For production would use OpenAI or Gemini embeddings
 
@@ -101,7 +95,7 @@ Using 500 chars with 50 char overlap because:
 ## Files That Matter
 
 ```
-src/lib/azure-openai.ts    - groq client, embedding function
+src/lib/azure-openai.ts    - Gemini client, embedding function
 src/lib/document-processor.ts - text extraction, ocr, chunking
 src/lib/vector-store.ts    - chunk storage and search
 src/app/api/chat/route.ts  - main q&a logic

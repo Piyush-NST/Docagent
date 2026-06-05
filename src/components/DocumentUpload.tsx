@@ -1,6 +1,7 @@
 'use client';
 
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
+import DocumentAnalysisLoader, { AnalysisStep } from './DocumentAnalysisLoader';
 import UploadToastNotice from './UploadToastNotice';
 import {
   MAX_UPLOAD_BYTES,
@@ -20,6 +21,11 @@ interface UploadedDocument {
     totalChunks: number;
     pages?: number;
     textLength: number;
+    ocrUsed: boolean;
+    embeddingsCreated: number;
+    indexStatus: 'Ready' | 'Failed';
+    retrievalStatus: 'Passed' | 'Weak' | 'Failed';
+    estimatedConfidence: number;
   };
 }
 
@@ -36,19 +42,26 @@ interface UploadToast {
   limitLabel?: string;
 }
 
-const loadingMessages = [
-  'Uploading document...',
-  'Analyzing document...',
-  'Extracting context...',
-  'Preparing grounded answers...',
+const uploadAnalysisSteps: AnalysisStep[] = [
+  { label: 'Upload received', detail: 'Securing your file inside the assistant workspace.' },
+  { label: 'Extracting document text', detail: 'Reading pages, paragraphs, tables, and metadata.' },
+  { label: 'Running OCR fallback if needed', detail: 'Checking whether image-aware extraction can recover more text.' },
+  { label: 'Chunking document', detail: 'Splitting the content into clean source-aware sections.' },
+  { label: 'Creating embeddings', detail: 'Indexing the document so grounded answers can find the right context.' },
 ];
+
+const UPLOAD_TIMEOUT_MS = 120_000;
+const MIN_ANALYSIS_DELAY_MS = 4_400;
+
+function wait(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
 
 function getUserFriendlyError(error: string): UploadToast {
   const errorMap: Record<string, string> = {
     'No text in document': 'Could not extract text from this file. Please try a different document.',
     'No text found': 'No readable text found in this image. Please try a clearer image.',
     Unsupported: `This file type is not supported. Please upload ${SUPPORTED_UPLOAD_LABEL} files.`,
-    GROQ_API_KEY: 'Service temporarily unavailable. Please try again later.',
     GEMINI_API_KEY: 'Service temporarily unavailable. Please try again later.',
     OPENAI_API_KEY: 'Service temporarily unavailable. Please try again later.',
     quota: 'Service limit reached. Please try again later.',
@@ -58,6 +71,9 @@ function getUserFriendlyError(error: string): UploadToast {
     '503': 'Service temporarily unavailable. Please try again later.',
     network: 'Network error. Please check your connection.',
     timeout: 'Request timed out. Please try again.',
+    AbortError: 'Upload timed out. Please try again with a smaller file or fewer pages.',
+    'timed out': 'Upload timed out. Please try again with a smaller file or fewer pages.',
+    'took too long': 'Upload timed out. Please try again with a smaller file or fewer pages.',
     FILE_TOO_LARGE: `This file is above the ${MAX_UPLOAD_LABEL} processing limit.`,
     'File too large': `This file is above the ${MAX_UPLOAD_LABEL} processing limit.`,
     'extract text': 'Could not read this document. Please try a different file.',
@@ -87,10 +103,11 @@ function getUserFriendlyError(error: string): UploadToast {
 }
 
 export default function DocumentUpload({ onDocumentUploaded }: DocumentUploadProps) {
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [toast, setToast] = useState<UploadToast | null>(null);
-  const [status, setStatus] = useState(loadingMessages[0]);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
 
   const showToast = (nextToast: UploadToast) => {
     setToast(nextToast);
@@ -99,8 +116,9 @@ export default function DocumentUpload({ onDocumentUploaded }: DocumentUploadPro
 
   const handleDragOver = useCallback((event: React.DragEvent) => {
     event.preventDefault();
+    if (isUploading) return;
     setIsDragging(true);
-  }, []);
+  }, [isUploading]);
 
   const handleDragLeave = useCallback((event: React.DragEvent) => {
     event.preventDefault();
@@ -121,21 +139,26 @@ export default function DocumentUpload({ onDocumentUploaded }: DocumentUploadPro
 
     setIsUploading(true);
     setToast(null);
-    setStatus(loadingMessages[0]);
+    setAnalysisError(null);
+    const analysisStartedAt = Date.now();
+
+    const controller = new AbortController();
+    const uploadTimeout = window.setTimeout(() => controller.abort(), UPLOAD_TIMEOUT_MS);
 
     try {
       const formData = new FormData();
       formData.append('file', file);
 
-      setStatus(loadingMessages[1]);
-
       const res = await fetch('/api/upload', {
         method: 'POST',
         body: formData,
+        signal: controller.signal,
       });
 
-      setStatus(loadingMessages[2]);
-      const data = await res.json();
+      const responseType = res.headers.get('content-type') || '';
+      const data = responseType.includes('application/json')
+        ? await res.json()
+        : { message: await res.text() };
 
       if (!res.ok) {
         if (data.error === 'FILE_TOO_LARGE') {
@@ -152,7 +175,11 @@ export default function DocumentUpload({ onDocumentUploaded }: DocumentUploadPro
         throw new Error(data.message || data.error || 'Upload failed');
       }
 
-      setStatus(loadingMessages[3]);
+      const elapsed = Date.now() - analysisStartedAt;
+      if (elapsed < MIN_ANALYSIS_DELAY_MS) {
+        await wait(MIN_ANALYSIS_DELAY_MS - elapsed);
+      }
+
       showToast({
         type: 'success',
         title: 'Document ready',
@@ -161,9 +188,18 @@ export default function DocumentUpload({ onDocumentUploaded }: DocumentUploadPro
       onDocumentUploaded(data);
     } catch (err) {
       console.error('Upload error:', err);
-      const errorMsg = err instanceof Error ? err.message : 'Upload failed';
+      const errorMsg = err instanceof Error ? `${err.name}: ${err.message}` : 'Upload failed';
+      setAnalysisError('The document could not be processed. Please review the message and try again.');
+      const elapsed = Date.now() - analysisStartedAt;
+      if (elapsed < MIN_ANALYSIS_DELAY_MS) {
+        await wait(MIN_ANALYSIS_DELAY_MS - elapsed);
+      } else {
+        await wait(900);
+      }
       showToast(getUserFriendlyError(errorMsg));
     } finally {
+      window.clearTimeout(uploadTimeout);
+      if (fileInputRef.current) fileInputRef.current.value = '';
       setIsUploading(false);
     }
   };
@@ -171,11 +207,12 @@ export default function DocumentUpload({ onDocumentUploaded }: DocumentUploadPro
   const handleDrop = useCallback((event: React.DragEvent) => {
     event.preventDefault();
     setIsDragging(false);
+    if (isUploading) return;
 
     const files = event.dataTransfer.files;
     if (files.length > 0) uploadFile(files[0]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [isUploading]);
 
   const handleFileSelect = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
@@ -208,16 +245,19 @@ export default function DocumentUpload({ onDocumentUploaded }: DocumentUploadPro
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
-        onClick={() => document.getElementById('file-input')?.click()}
+        onClick={() => {
+          if (!isUploading) fileInputRef.current?.click();
+        }}
         role="button"
         tabIndex={0}
         onKeyDown={(event) => {
-          if (event.key === 'Enter' || event.key === ' ') {
-            document.getElementById('file-input')?.click();
+          if (!isUploading && (event.key === 'Enter' || event.key === ' ')) {
+            fileInputRef.current?.click();
           }
         }}
       >
         <input
+          ref={fileInputRef}
           type="file"
           id="file-input"
           accept=".pdf,.docx,.doc,.png,.jpg,.jpeg"
@@ -228,7 +268,7 @@ export default function DocumentUpload({ onDocumentUploaded }: DocumentUploadPro
 
         <div className="upload-icon">
           {isUploading ? (
-            <div className="loading-spinner" />
+            <div className="analysis-mini-mark" />
           ) : (
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
               <path d="M14 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7z" />
@@ -240,10 +280,12 @@ export default function DocumentUpload({ onDocumentUploaded }: DocumentUploadPro
         </div>
 
         {isUploading ? (
-          <div className="upload-copy">
-            <strong>{status}</strong>
-            <span>The assistant is reading structure, context, and citations.</span>
-          </div>
+          <DocumentAnalysisLoader
+            steps={uploadAnalysisSteps}
+            title="Preparing your document"
+            mode="upload"
+            error={analysisError}
+          />
         ) : (
           <div className="upload-copy">
             <strong>Drop files here</strong>

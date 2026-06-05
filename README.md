@@ -1,6 +1,6 @@
 # DocAgent - Document Q&A with AI
 
-A web app that lets you upload documents and ask questions about them. Uses Groq LLM for fast responses and Gemini for image OCR.
+A web app that lets you upload documents and ask questions about them. Uses Gemini for grounded answers and image OCR.
 🔗 **Live Demo**: https://docagent-ai-rag-system.vercel.app/
 <img width="1427" height="696" alt="Screenshot 2026-05-01 at 1 31 25 AM" src="https://github.com/user-attachments/assets/4a007575-fcfa-4b2d-9821-7a3021a59150" />
 
@@ -13,12 +13,14 @@ A web app that lets you upload documents and ask questions about them. Uses Groq
 - Shows which page/section the answer came from
 - OCR support for scanned PDFs and images
 - Modern dark themed UI
+- Premium document-readiness metrics after upload
+- Structured answer cards with clean sections, source chips, and long-answer controls
 
 ## Tech Stack
 
 - **Frontend**: Next.js 14, React, TypeScript
 - **Backend**: Next.js API Routes
-- **AI/LLM**: Groq (llama-3.3-70b-versatile) - fast and free
+- **AI/LLM**: Google Gemini (gemini-2.0-flash)
 - **OCR**: Google Gemini (gemini-2.0-flash) - for image text extraction
 - **Storage**: In-memory (can use Azure Blob if configured)
 - **Text Extraction**: unpdf for PDFs, mammoth for DOCX
@@ -28,8 +30,7 @@ A web app that lets you upload documents and ask questions about them. Uses Groq
 ### Prerequisites
 
 - Node.js 18+
-- Groq API key (free from https://console.groq.com/keys)
-- Gemini API key (free from https://aistudio.google.com/app/apikey) - optional, for image OCR
+- Gemini API key (from https://aistudio.google.com/app/apikey)
 
 ### Installation
 
@@ -44,8 +45,8 @@ cp .env.example .env.local
 Add your API keys to `.env.local`:
 
 ```
-GROQ_API_KEY=your_groq_key
 GEMINI_API_KEY=your_gemini_key
+GEMINI_MODEL=gemini-2.0-flash
 ```
 
 Then start:
@@ -70,14 +71,14 @@ User uploads a document. Gets stored in memory and assigned a unique ID.
 
 ### 3. Chunking & Embedding
 
-Text is splitted into ~500 character chunks with overlap. Each chunk gets a local hash-based embedding (since Groq doesn't have embedding API).
+Text is splitted into ~500 character chunks with overlap. Each chunk gets a local hash-based embedding for lightweight similarity search.
 
 ### 4. Question Answering
 
 When user asks a question:
 1. Find relevant chunks using similarity search
 2. Build prompt with chunks as context
-3. Send to Groq LLM with grounding instructions
+3. Send to Gemini with grounding instructions
 4. Return answer with source citations
 
 ### 5. Grounding
@@ -97,12 +98,15 @@ doc-agent/
 │   │   ├── page.tsx               - main page
 │   │   └── globals.css            - styles
 │   ├── components/
+│   │   ├── AssistantWorkspace.tsx - assistant shell
 │   │   ├── DocumentUpload.tsx     - drag & drop upload
 │   │   ├── ChatInterface.tsx      - chat UI
+│   │   ├── DocumentReadinessPanel.tsx - indexing quality metrics
+│   │   ├── DocumentAnalysisLoader.tsx - premium loading state
 │   │   └── DocumentList.tsx       - doc list
 │   └── lib/
 │       ├── azure-blob.ts          - storage (in-memory or azure)
-│       ├── azure-openai.ts        - groq client & embeddings
+│       ├── azure-openai.ts        - Gemini chat client & local embeddings
 │       ├── document-processor.ts  - text extraction & chunking
 │       └── vector-store.ts        - in-memory vector db
 └── docs/
@@ -120,4 +124,6 @@ After uploading try asking:
 
 <img width="1427" height="900" alt="Screenshot 2026-05-01 at 1 31 46 AM" src="https://github.com/user-attachments/assets/ce1ef12f-4cfc-4cde-b5e3-d8f5c7381a08" />
 
+## Contributors
 
+- [Prerak Arya](https://github.com/prerak2612) - Creator and maintainer

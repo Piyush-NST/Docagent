@@ -68,7 +68,7 @@ export default function Home() {
   return (
     <AppChrome>
       <main className="relative z-[1] overflow-x-hidden px-4 pb-12 sm:px-6 lg:px-8">
-        <section className="relative mx-auto max-w-[1180px] overflow-hidden rounded-[2rem] border border-white/10 bg-slate-950/72 shadow-[0_36px_120px_rgba(0,0,0,0.42)] backdrop-blur-2xl">
+        <section className="relative mx-auto max-w-[1180px] overflow-hidden rounded-[1.35rem] border border-white/10 bg-slate-950/72 shadow-[0_36px_120px_rgba(0,0,0,0.42)] backdrop-blur-2xl sm:rounded-[2rem]">
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_68%_12%,rgba(34,211,238,0.28),transparent_28%),radial-gradient(circle_at_28%_28%,rgba(249,115,22,0.13),transparent_24%),radial-gradient(circle_at_48%_102%,rgba(124,58,237,0.24),transparent_35%),linear-gradient(135deg,rgba(2,6,23,0.35),rgba(8,8,18,0.96))]" />
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(rgba(255,255,255,0.28)_0.55px,transparent_0.7px),linear-gradient(rgba(255,255,255,0.035)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.035)_1px,transparent_1px)] bg-[length:3px_3px,70px_70px,70px_70px] opacity-[0.18] [mask-image:linear-gradient(to_bottom,rgba(0,0,0,0.82),transparent_94%)]" />
           <div className="pointer-events-none absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-cyan-200/50 to-transparent" />
@@ -77,7 +77,7 @@ export default function Home() {
             className="relative z-[2] mx-auto flex min-h-16 items-center justify-between gap-3 border-b border-white/10 px-4 py-3 sm:px-6 lg:px-8"
             aria-label="Primary navigation"
           >
-            <Link className="inline-flex items-center gap-3 whitespace-nowrap text-sm font-black text-white no-underline sm:text-base" href="/">
+            <Link className="inline-flex min-w-0 items-center gap-2 whitespace-nowrap text-sm font-black text-white no-underline sm:gap-3 sm:text-base" href="/">
               <span className="grid size-9 shrink-0 place-items-center rounded-full border border-cyan-200/25 bg-gradient-to-br from-sky-500/35 to-violet-500/25 text-xs text-cyan-100 shadow-[0_0_24px_rgba(14,165,233,0.22)]">
                 DA
               </span>
@@ -105,13 +105,13 @@ export default function Home() {
             </Link>
           </nav>
 
-          <div className="relative z-[1] mx-auto flex max-w-[980px] flex-col items-center px-5 py-14 text-center sm:px-8 sm:py-16 lg:py-20">
+          <div className="relative z-[1] mx-auto flex max-w-[980px] flex-col items-center px-4 py-11 text-center sm:px-8 sm:py-16 lg:py-20">
             <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-cyan-200/25 bg-sky-500/10 px-4 py-2 text-xs font-extrabold text-cyan-100 shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_0_30px_rgba(14,165,233,0.14)] backdrop-blur-md sm:text-sm">
               <span className="size-2 rounded-full bg-cyan-300 shadow-[0_0_18px_#22d3ee]" />
               AI document workspace
             </div>
 
-            <h1 className="mx-auto max-w-[900px] text-balance font-serif text-5xl font-black leading-[1.02] tracking-normal text-white sm:text-6xl lg:text-7xl xl:text-8xl">
+            <h1 className="mx-auto max-w-[900px] text-balance font-serif text-[clamp(3rem,13vw,5rem)] font-black leading-[1.02] tracking-normal text-white sm:text-6xl lg:text-7xl xl:text-8xl">
               Ask your documents.
               <span className="mt-2 block font-serif italic text-cyan-300 drop-shadow-[0_0_34px_rgba(19,199,246,0.24)]">
                 Get grounded answers.
@@ -124,7 +124,7 @@ export default function Home() {
             </p>
 
             <Link
-              className="mt-8 inline-flex min-h-[3.25rem] items-center justify-center gap-3 rounded-full bg-gradient-to-br from-cyan-300 via-sky-500 to-blue-400 px-8 text-base font-black text-slate-950 no-underline shadow-[0_20px_54px_rgba(14,165,233,0.32),inset_0_1px_0_rgba(255,255,255,0.42)] transition hover:-translate-y-1 hover:shadow-[0_26px_64px_rgba(14,165,233,0.4),inset_0_1px_0_rgba(255,255,255,0.54)]"
+              className="mt-8 inline-flex min-h-[3.25rem] w-full max-w-[18rem] items-center justify-center gap-3 rounded-full bg-gradient-to-br from-cyan-300 via-sky-500 to-blue-400 px-8 text-base font-black text-slate-950 no-underline shadow-[0_20px_54px_rgba(14,165,233,0.32),inset_0_1px_0_rgba(255,255,255,0.42)] transition hover:-translate-y-1 hover:shadow-[0_26px_64px_rgba(14,165,233,0.4),inset_0_1px_0_rgba(255,255,255,0.54)] sm:w-auto"
               href="/assistant"
             >
               Try Now

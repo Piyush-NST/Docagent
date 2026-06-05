@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import ChatInterface from '@/components/ChatInterface';
+import DocumentReadinessPanel, { DocumentReadiness } from '@/components/DocumentReadinessPanel';
 import DocumentList from '@/components/DocumentList';
 import DocumentUpload from '@/components/DocumentUpload';
 
@@ -16,6 +17,11 @@ interface UploadedDocument {
     totalChunks: number;
     pages?: number;
     textLength: number;
+    ocrUsed: boolean;
+    embeddingsCreated: number;
+    indexStatus: 'Ready' | 'Failed';
+    retrievalStatus: 'Passed' | 'Weak' | 'Failed';
+    estimatedConfidence: number;
   };
 }
 
@@ -24,6 +30,7 @@ interface Document {
   fileName: string;
   chunkCount: number;
   fileType?: string;
+  readiness?: DocumentReadiness;
 }
 
 export default function AssistantWorkspace() {
@@ -63,6 +70,17 @@ export default function AssistantWorkspace() {
       fileName: doc.fileName,
       chunkCount: doc.processing.totalChunks,
       fileType: doc.fileType,
+      readiness: {
+        fileSize: doc.fileSize,
+        textLength: doc.processing.textLength,
+        pages: doc.processing.pages,
+        totalChunks: doc.processing.totalChunks,
+        embeddingsCreated: doc.processing.embeddingsCreated,
+        ocrUsed: doc.processing.ocrUsed,
+        indexStatus: doc.processing.indexStatus,
+        retrievalStatus: doc.processing.retrievalStatus,
+        estimatedConfidence: doc.processing.estimatedConfidence,
+      },
     };
 
     setDocuments((prev) => [...prev, newDoc]);
@@ -118,6 +136,9 @@ export default function AssistantWorkspace() {
         </aside>
 
         <div className="right-rail">
+          {selectedDoc?.readiness && (
+            <DocumentReadinessPanel fileName={selectedDoc.fileName} readiness={selectedDoc.readiness} />
+          )}
           <ChatInterface documentId={selectedDoc?.documentId || null} documentName={selectedDoc?.fileName} />
         </div>
       </section>

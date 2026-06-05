@@ -31,12 +31,17 @@ export interface SearchResult {
   };
 }
 
-const vectorStore: Map<string, StoredChunk[]> = new Map();
+const globalForVectorStore = globalThis as typeof globalThis & {
+  __docAgentVectorStore?: Map<string, StoredChunk[]>;
+};
+
+const vectorStore = globalForVectorStore.__docAgentVectorStore ?? new Map<string, StoredChunk[]>();
+globalForVectorStore.__docAgentVectorStore = vectorStore;
 
 export async function storeDocumentChunks(
   documentId: string,
   chunks: DocumentChunk[]
-): Promise<void> {
+): Promise<number> {
   console.log(`Storing ${chunks.length} chunks for doc ${documentId}`);
   
   const storedChunks: StoredChunk[] = [];
@@ -61,6 +66,7 @@ export async function storeDocumentChunks(
 
   vectorStore.set(documentId, storedChunks);
   console.log(`Stored ${storedChunks.length} embeddings`);
+  return storedChunks.length;
 }
 
 // finds relevant chunks for a question
@@ -132,6 +138,7 @@ export async function searchAllDocuments(
   for (const [docId, chunks] of vectorStore.entries()) {
     for (const chunk of chunks) {
       const similarity = cosineSimilarity(queryEmbedding, chunk.embedding);
+      if (similarity < minRelevance) continue;
       
       allResults.push({
         id: chunk.id,

@@ -26,6 +26,7 @@ export interface ProcessedDocument {
   chunks: DocumentChunk[];
   rawText: string;
   pages?: number;
+  ocrUsed: boolean;
 }
 
 // ocr using gemini
@@ -63,7 +64,7 @@ async function ocrImage(imageBuffer: Buffer, mimeType: string = 'image/png'): Pr
 }
 
 // pdf extraction
-async function extractFromPDF(buffer: Buffer): Promise<{ text: string; pages: number }> {
+async function extractFromPDF(buffer: Buffer): Promise<{ text: string; pages: number; ocrUsed: boolean }> {
   const { extractText, getDocumentProxy } = await import('unpdf');
   const pdf = await getDocumentProxy(new Uint8Array(buffer));
   const numPages = pdf.numPages;
@@ -74,7 +75,7 @@ async function extractFromPDF(buffer: Buffer): Promise<{ text: string; pages: nu
   
   if (text && text.trim().length > 50) {
     console.log(`PDF text extraction: ${text.length} chars`);
-    return { text, pages: numPages };
+    return { text, pages: numPages, ocrUsed: false };
   }
 
   // scanned pdf maybe, try ocr
@@ -107,13 +108,13 @@ async function extractFromPDF(buffer: Buffer): Promise<{ text: string; pages: nu
 
     if (allText.trim().length > 0) {
       console.log(`[OCR] Total: ${allText.length} chars`);
-      return { text: allText, pages: numPages };
+      return { text: allText, pages: numPages, ocrUsed: true };
     }
   } catch (ocrError) {
     console.error('PDF OCR failed:', ocrError);
   }
 
-  return { text: text || '', pages: numPages };
+  return { text: text || '', pages: numPages, ocrUsed: false };
 }
 
 // docx extraction
@@ -140,12 +141,12 @@ export function detectDocumentType(contentType: string, fileName: string): 'pdf'
   return 'unknown';
 }
 
-export async function extractText(buffer: Buffer, contentType: string, fileName: string): Promise<{ text: string; pages?: number }> {
+export async function extractText(buffer: Buffer, contentType: string, fileName: string): Promise<{ text: string; pages?: number; ocrUsed: boolean }> {
   const type = detectDocumentType(contentType, fileName);
   
   if (type === 'pdf') return extractFromPDF(buffer);
-  if (type === 'docx') return { text: await extractFromDOCX(buffer) };
-  if (type === 'image') return { text: await extractFromImage(buffer, contentType) };
+  if (type === 'docx') return { text: await extractFromDOCX(buffer), ocrUsed: false };
+  if (type === 'image') return { text: await extractFromImage(buffer, contentType), ocrUsed: true };
   
   throw new Error(`Unsupported file type: ${contentType}`);
 }
@@ -201,7 +202,7 @@ export async function processDocument(
 ): Promise<ProcessedDocument> {
   console.log(`Processing: ${fileName}`);
   
-  const { text, pages } = await extractText(buffer, contentType, fileName);
+  const { text, pages, ocrUsed } = await extractText(buffer, contentType, fileName);
   
   if (!text?.trim() || text.trim().length < 10) {
     throw new Error('Could not extract readable text from document.');
@@ -228,5 +229,5 @@ export async function processDocument(
 
   console.log(`Created ${chunks.length} chunks`);
 
-  return { documentId, fileName, fileType: contentType, totalChunks: chunks.length, chunks, rawText: text, pages };
+  return { documentId, fileName, fileType: contentType, totalChunks: chunks.length, chunks, rawText: text, pages, ocrUsed };
 }

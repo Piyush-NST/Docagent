@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import DocumentAnalysisLoader, { AnalysisStep } from './DocumentAnalysisLoader';
 
 interface Source {
   chunkId: string;
@@ -24,14 +25,198 @@ interface ChatInterfaceProps {
   documentName?: string;
 }
 
-const thinkingMessages = ['Analyzing document...', 'Extracting context...', 'Checking sources...'];
+interface AnswerSection {
+  title: string;
+  items: string[];
+  paragraphs: string[];
+}
+
+const answerAnalysisSteps: AnalysisStep[] = [
+  { label: 'Searching relevant context', detail: 'Matching your question against the indexed document sections.' },
+  { label: 'Preparing grounded answer', detail: 'Composing an answer with source-aware evidence.' },
+  { label: 'Checking sources', detail: 'Verifying that the response stays tied to retrieved context.' },
+];
+
+const MIN_ANSWER_DELAY_MS = 4_200;
+
+function wait(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function cleanAnswerText(content: string) {
+  return content
+    .replace(/\[Source\s+\d+(?:,\s*Page\s*\d+|- Page\s*\d+)?\]/gi, '')
+    .replace(/\bfrom\s+0\s+1\b/gi, '')
+    .replace(/\b0\s+1\b/g, '')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function cleanAnswerLine(text: string) {
+  return text
+    .replace(/\s+/g, ' ')
+    .replace(/\s+([,.;:!?])/g, '$1')
+    .trim();
+}
+
+function splitDenseText(text: string) {
+  const cleaned = cleanAnswerLine(text);
+  if (cleaned.length <= 190) return [cleaned];
+
+  const sentences = cleaned.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [cleaned];
+  const chunks: string[] = [];
+
+  for (const sentence of sentences) {
+    const trimmed = cleanAnswerLine(sentence);
+    if (!trimmed) continue;
+
+    if (trimmed.length <= 220) {
+      chunks.push(trimmed);
+      continue;
+    }
+
+    const parts = trimmed.split(/\s{2,}|;\s+|,\s+(?=[A-Z][a-z])/).map(cleanAnswerLine).filter(Boolean);
+    chunks.push(...(parts.length > 1 ? parts : [trimmed.slice(0, 220).trim()]));
+  }
+
+  return chunks.length > 0 ? chunks : [cleaned.slice(0, 220).trim()];
+}
+
+function formatInlineText(text: string) {
+  const parts = text.split(/(\*\*[^*]+\*\*)/g);
+
+  return parts.map((part, index) => {
+    if (part.startsWith('**') && part.endsWith('**')) {
+      return <strong key={`${part}-${index}`}>{part.slice(2, -2)}</strong>;
+    }
+
+    return <React.Fragment key={`${part}-${index}`}>{part}</React.Fragment>;
+  });
+}
+
+function getSectionIcon(title: string) {
+  const lowerTitle = title.toLowerCase();
+  if (lowerTitle.includes('education')) return 'ED';
+  if (lowerTitle.includes('experience') || lowerTitle.includes('project')) return 'XP';
+  if (lowerTitle.includes('skill')) return 'SK';
+  if (lowerTitle.includes('date') || lowerTitle.includes('number')) return 'NO';
+  if (lowerTitle.includes('highlight') || lowerTitle.includes('finding')) return 'HI';
+  return 'AI';
+}
+
+function parseAnswerSections(content: string): AnswerSection[] {
+  const cleaned = cleanAnswerText(content);
+  const lines = cleaned.split('\n');
+  const sections: AnswerSection[] = [];
+  let currentSection: AnswerSection | null = null;
+
+  const ensureSection = () => {
+    if (!currentSection) {
+      currentSection = { title: 'Overview', items: [], paragraphs: [] };
+      sections.push(currentSection);
+    }
+
+    return currentSection;
+  };
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    const heading = trimmed.match(/^#{1,3}\s+(.+)$/);
+    if (heading) {
+      currentSection = { title: heading[1].trim(), items: [], paragraphs: [] };
+      sections.push(currentSection);
+      continue;
+    }
+
+    const bullet = trimmed.match(/^[-*]\s+(.+)$/);
+    if (bullet) {
+      ensureSection().items.push(...splitDenseText(bullet[1].trim()));
+      continue;
+    }
+
+    const target = ensureSection();
+    const denseLines = splitDenseText(trimmed);
+    if (trimmed.length > 180 || denseLines.length > 1) {
+      target.items.push(...denseLines);
+    } else {
+      target.paragraphs.push(cleanAnswerLine(trimmed));
+    }
+  }
+
+  return sections.filter(section => section.title.toLowerCase() !== 'sources');
+}
+
+function AnswerRenderer({ content }: { content: string }) {
+  const sections = useMemo(() => parseAnswerSections(content), [content]);
+  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({});
+
+  return (
+    <div className="answer-renderer">
+      {sections.map((section, sectionIndex) => {
+        const sectionKey = `${section.title}-${sectionIndex}`;
+        const isExpanded = Boolean(expandedSections[sectionKey]);
+        const initialCount = section.items.some(item => item.length > 170) ? 3 : 5;
+        const visibleItems = isExpanded ? section.items : section.items.slice(0, initialCount);
+        const hiddenCount = Math.max(0, section.items.length - visibleItems.length);
+        const isLongSection = section.items.length > 4 || section.items.some(item => item.length > 170);
+
+        return (
+          <section className={`answer-section ${isLongSection ? 'answer-section-long' : ''}`} key={sectionKey}>
+            <div className="answer-section-heading">
+              <span>{getSectionIcon(section.title)}</span>
+              <h3>{section.title}</h3>
+            </div>
+
+            {section.paragraphs.map((paragraph, index) => (
+              <p className="answer-paragraph" key={`${section.title}-p-${index}`}>
+                {formatInlineText(paragraph)}
+              </p>
+            ))}
+
+            {section.items.length > 0 && (
+              <>
+                <div className="answer-card-grid">
+                  {visibleItems.map((item, index) => (
+                    <div className="answer-bullet-card" key={`${section.title}-item-${index}`}>
+                      <span className="answer-bullet-dot" />
+                      <p>{formatInlineText(item)}</p>
+                    </div>
+                  ))}
+                </div>
+
+                {hiddenCount > 0 || isExpanded ? (
+                  <button
+                    type="button"
+                    className="answer-toggle"
+                    onClick={() => {
+                      setExpandedSections((current) => ({
+                        ...current,
+                        [sectionKey]: !isExpanded,
+                      }));
+                    }}
+                  >
+                    {isExpanded ? 'Show less' : `Show ${hiddenCount} more`}
+                  </button>
+                ) : null}
+              </>
+            )}
+          </section>
+        );
+      })}
+    </div>
+  );
+}
 
 export default function ChatInterface({ documentId, documentName }: ChatInterfaceProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
-  const [thinkingIndex, setThinkingIndex] = useState(0);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const promptChips = useMemo(
@@ -47,16 +232,6 @@ export default function ChatInterface({ documentId, documentName }: ChatInterfac
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, loading]);
-
-  useEffect(() => {
-    if (!loading) return;
-
-    const interval = window.setInterval(() => {
-      setThinkingIndex((current) => (current + 1) % thinkingMessages.length);
-    }, 1200);
-
-    return () => window.clearInterval(interval);
-  }, [loading]);
 
   useEffect(() => {
     if (documentId && documentName) {
@@ -86,7 +261,8 @@ export default function ChatInterface({ documentId, documentName }: ChatInterfac
     setMessages((prev) => [...prev, userMsg]);
     setInput('');
     setLoading(true);
-    setThinkingIndex(0);
+    setAnalysisError(null);
+    const analysisStartedAt = Date.now();
 
     try {
       const res = await fetch('/api/chat', {
@@ -104,6 +280,11 @@ export default function ChatInterface({ documentId, documentName }: ChatInterfac
         throw new Error(data.message || data.error || 'Request failed');
       }
 
+      const elapsed = Date.now() - analysisStartedAt;
+      if (elapsed < MIN_ANSWER_DELAY_MS) {
+        await wait(MIN_ANSWER_DELAY_MS - elapsed);
+      }
+
       const botMsg: Message = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
@@ -116,6 +297,13 @@ export default function ChatInterface({ documentId, documentName }: ChatInterfac
       setMessages((prev) => [...prev, botMsg]);
     } catch (err) {
       console.error('Chat error:', err);
+      setAnalysisError('The assistant could not finish this answer. Please try again.');
+      const elapsed = Date.now() - analysisStartedAt;
+      if (elapsed < MIN_ANSWER_DELAY_MS) {
+        await wait(MIN_ANSWER_DELAY_MS - elapsed);
+      } else {
+        await wait(900);
+      }
       showToast('Unable to get response. Please try again.');
 
       setMessages((prev) => [
@@ -206,8 +394,10 @@ export default function ChatInterface({ documentId, documentName }: ChatInterfac
                 <span>You</span>
               )}
             </div>
-            <div className="message-bubble">
-              <div className="message-content">{msg.content}</div>
+            <div className={`message-bubble ${msg.role === 'assistant' ? 'answer-message-bubble' : ''}`}>
+              <div className="message-content">
+                {msg.role === 'assistant' ? <AnswerRenderer content={msg.content} /> : msg.content}
+              </div>
 
               {msg.sources && msg.sources.length > 0 && (
                 <div className="sources">
@@ -239,13 +429,13 @@ export default function ChatInterface({ documentId, documentName }: ChatInterfac
                 <path d="M12 3 4 7v6c0 5 3.4 7.7 8 8 4.6-.3 8-3 8-8V7z" />
               </svg>
             </div>
-            <div className="message-bubble thinking-bubble">
-              <div className="loading-dots">
-                <span />
-                <span />
-                <span />
-              </div>
-              <p>{thinkingMessages[thinkingIndex]}</p>
+            <div className="message-bubble thinking-bubble premium-thinking-bubble">
+              <DocumentAnalysisLoader
+                steps={answerAnalysisSteps}
+                title="Building a grounded answer"
+                mode="chat"
+                error={analysisError}
+              />
             </div>
           </article>
         )}

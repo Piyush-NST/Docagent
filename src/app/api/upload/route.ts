@@ -14,9 +14,63 @@ import {
   formatBytes,
 } from '@/lib/upload-limits';
 
+const STORAGE_TIMEOUT_MS = 20_000;
+const RECEIVE_FILE_TIMEOUT_MS = 45_000;
+const DOCUMENT_PROCESSING_TIMEOUT_MS = 75_000;
+const EMBEDDING_TIMEOUT_MS = 30_000;
+
+function getRetrievalStatus(textLength: number, totalChunks: number, embeddingsCreated: number): 'Passed' | 'Weak' | 'Failed' {
+  if (totalChunks === 0 || embeddingsCreated === 0) return 'Failed';
+  if (embeddingsCreated < totalChunks || textLength < 180) return 'Weak';
+  return 'Passed';
+}
+
+function getEstimatedConfidence(
+  textLength: number,
+  totalChunks: number,
+  embeddingsCreated: number,
+  retrievalStatus: 'Passed' | 'Weak' | 'Failed'
+): number {
+  if (retrievalStatus === 'Failed') return 12;
+
+  let score = retrievalStatus === 'Passed' ? 62 : 38;
+  score += Math.min(18, Math.floor(textLength / 900) * 3);
+  score += Math.min(12, totalChunks * 2);
+  score += embeddingsCreated >= totalChunks ? 8 : -8;
+
+  return Math.max(10, Math.min(96, score));
+}
+
+class UploadStepTimeoutError extends Error {
+  status = 504;
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'UploadStepTimeoutError';
+  }
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => reject(new UploadStepTimeoutError(message)), timeoutMs);
+  });
+
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
+
 export async function POST(request: NextRequest) {
   try {
-    await ensureContainerExists();
+    await withTimeout(
+      ensureContainerExists(),
+      STORAGE_TIMEOUT_MS,
+      'Preparing document storage took too long. Please try again.'
+    );
 
     const contentLength = Number(request.headers.get('content-length') || 0);
     if (contentLength > REQUEST_BODY_HARD_LIMIT_BYTES) {
@@ -33,7 +87,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const formData = await request.formData();
+    const formData = await withTimeout(
+      request.formData(),
+      RECEIVE_FILE_TIMEOUT_MS,
+      'Receiving the uploaded file took too long. Please try a smaller file or selected pages.'
+    );
     const file = formData.get('file') as File | null;
 
     if (!file) {
@@ -69,18 +127,33 @@ export async function POST(request: NextRequest) {
     const buffer = Buffer.from(arrayBuffer);
 
     console.log('Uploading to blob storage...');
-    const metadata = await uploadDocument(buffer, file.name, file.type);
+    const metadata = await withTimeout(
+      uploadDocument(buffer, file.name, file.type),
+      STORAGE_TIMEOUT_MS,
+      'Saving the uploaded file took too long. Please try again with a smaller file.'
+    );
 
     console.log('Processing document...');
-    const processedDoc = await processDocument(
-      metadata.documentId,
-      buffer,
-      file.name,
-      file.type
+    const processedDoc = await withTimeout(
+      processDocument(metadata.documentId, buffer, file.name, file.type),
+      DOCUMENT_PROCESSING_TIMEOUT_MS,
+      'Reading this document took too long. Try compressing it, splitting it, or uploading selected pages.'
     );
 
     console.log('Generating embeddings...');
-    await storeDocumentChunks(metadata.documentId, processedDoc.chunks);
+    const embeddingsCreated = await withTimeout(
+      storeDocumentChunks(metadata.documentId, processedDoc.chunks),
+      EMBEDDING_TIMEOUT_MS,
+      'Indexing this document took too long. Please try a smaller file.'
+    );
+
+    const retrievalStatus = getRetrievalStatus(processedDoc.rawText.length, processedDoc.totalChunks, embeddingsCreated);
+    const estimatedConfidence = getEstimatedConfidence(
+      processedDoc.rawText.length,
+      processedDoc.totalChunks,
+      embeddingsCreated,
+      retrievalStatus
+    );
 
     console.log('Upload complete!');
 
@@ -95,18 +168,25 @@ export async function POST(request: NextRequest) {
         totalChunks: processedDoc.totalChunks,
         pages: processedDoc.pages,
         textLength: processedDoc.rawText.length,
+        ocrUsed: processedDoc.ocrUsed,
+        embeddingsCreated,
+        indexStatus: embeddingsCreated === processedDoc.totalChunks ? 'Ready' : 'Failed',
+        retrievalStatus,
+        estimatedConfidence,
       },
       message: 'Document uploaded successfully!',
     });
 
   } catch (error) {
     console.error('Upload error:', error);
+    const status = error instanceof UploadStepTimeoutError ? error.status : 500;
+
     return NextResponse.json(
       { 
         error: 'Upload failed',
         message: error instanceof Error ? error.message : 'Something went wrong'
       },
-      { status: 500 }
+      { status }
     );
   }
 }
