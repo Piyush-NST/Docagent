@@ -61,7 +61,7 @@ Open http://localhost:3000
 
 ### 1. Upload
 
-User uploads a document. Gets stored in memory and assigned a unique ID.
+User uploads an document. Gets stored in memory and assigned a unique ID.
 
 ### 2. Text Extraction
 
