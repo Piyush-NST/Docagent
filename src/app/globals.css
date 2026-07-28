@@ -1123,6 +1123,82 @@
   color: #fda4af;
 }
 
+.readiness-failure-card {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+  border: 1px solid rgba(251, 191, 36, 0.28);
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(251, 191, 36, 0.1), rgba(251, 191, 36, 0.03)),
+    rgba(12, 12, 14, 0.55);
+}
+
+.readiness-failure-title {
+  margin: 0 !important;
+  color: #fde68a !important;
+  font-size: 1rem !important;
+  font-weight: 600 !important;
+  line-height: 1.4 !important;
+}
+
+.readiness-failure-copy {
+  margin: 0 !important;
+  color: #d4d4d8 !important;
+  font-size: 0.92rem !important;
+  line-height: 1.55 !important;
+}
+
+.readiness-tip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.readiness-tip-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 11px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #a1a1aa;
+  font-size: 0.78rem;
+}
+
+.readiness-retry-btn {
+  justify-self: start;
+  margin-top: 4px;
+  min-width: 140px;
+}
+
+.readiness-panel-failed .readiness-badge {
+  border-color: rgba(251, 191, 36, 0.35);
+  background: rgba(251, 191, 36, 0.08);
+  color: #fbbf24;
+}
+
+.readiness-panel-failed .readiness-glow {
+  background:
+    radial-gradient(circle at 12% 0%, rgba(251, 191, 36, 0.14), transparent 36%),
+    radial-gradient(circle at 88% 18%, rgba(251, 113, 133, 0.08), transparent 34%);
+}
+
+.readiness-metric-grid-compact {
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+}
+
+.document-meta-warn {
+  color: #fbbf24 !important;
+}
+
+.document-item-failed {
+  border-color: rgba(251, 191, 36, 0.16);
+}
+
 .readiness-score-card {
   display: grid;
   gap: 12px;

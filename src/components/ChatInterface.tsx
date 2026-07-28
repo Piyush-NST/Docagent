@@ -24,6 +24,8 @@ interface Message {
 interface ChatInterfaceProps {
   documentId: string | null;
   documentName?: string;
+  documentReady?: boolean;
+  documentStatus?: string;
 }
 
 interface AnswerSection {
@@ -212,7 +214,12 @@ function AnswerRenderer({ content }: { content: string }) {
   );
 }
 
-export default function ChatInterface({ documentId, documentName }: ChatInterfaceProps) {
+export default function ChatInterface({
+  documentId,
+  documentName,
+  documentReady = true,
+  documentStatus,
+}: ChatInterfaceProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -224,6 +231,7 @@ export default function ChatInterface({ documentId, documentName }: ChatInterfac
     () => ['Summarize this document', 'What are the key findings?', 'List dates and numbers'],
     [],
   );
+  const chatEnabled = Boolean(documentId && documentReady);
 
   const showToast = (message: string) => {
     setToast({ title: 'Something went wrong', message });
@@ -236,6 +244,19 @@ export default function ChatInterface({ documentId, documentName }: ChatInterfac
 
   useEffect(() => {
     if (documentId && documentName) {
+      if (!documentReady) {
+        setMessages([
+          {
+            id: 'not-ready',
+            role: 'assistant',
+            content:
+              'This document is not ready for questions yet. We could not reliably extract readable text. Try Retry OCR or upload a clearer file.',
+            timestamp: new Date(),
+          },
+        ]);
+        return;
+      }
+
       setMessages([
         {
           id: 'welcome',
@@ -247,10 +268,10 @@ export default function ChatInterface({ documentId, documentName }: ChatInterfac
     } else {
       setMessages([]);
     }
-  }, [documentId, documentName]);
+  }, [documentId, documentName, documentReady]);
 
   const sendMessage = async (question = input) => {
-    if (!question.trim() || !documentId || loading) return;
+    if (!question.trim() || !documentId || loading || !documentReady) return;
 
     const userMsg: Message = {
       id: Date.now().toString(),
@@ -278,6 +299,9 @@ export default function ChatInterface({ documentId, documentName }: ChatInterfac
       const data = await res.json();
 
       if (!res.ok) {
+        if (data.error === 'DOCUMENT_NOT_READY') {
+          throw new Error(data.message || 'This document is not ready for questions.');
+        }
         throw new Error(data.message || data.error || 'Request failed');
       }
 
@@ -373,9 +397,9 @@ export default function ChatInterface({ documentId, documentName }: ChatInterfac
           <h2>Chat with Document</h2>
           <p>{documentName}</p>
         </div>
-        <span className="status-badge status-success">
+        <span className={`status-badge ${chatEnabled ? 'status-success' : 'status-warning'}`}>
           <span className="status-dot" />
-          Grounded
+          {chatEnabled ? 'Grounded' : documentStatus === 'ocr_failed' ? 'OCR Failed' : 'Needs Attention'}
         </span>
       </div>
 
@@ -444,7 +468,7 @@ export default function ChatInterface({ documentId, documentName }: ChatInterfac
 
       <div className="prompt-chip-row">
         {promptChips.map((chip) => (
-          <button type="button" key={chip} onClick={() => sendMessage(chip)} disabled={loading}>
+          <button type="button" key={chip} onClick={() => sendMessage(chip)} disabled={loading || !chatEnabled}>
             {chip}
           </button>
         ))}
@@ -453,14 +477,21 @@ export default function ChatInterface({ documentId, documentName }: ChatInterfac
       <div className="chat-input-container">
         <input
           type="text"
-          placeholder="Ask anything grounded in this document..."
+          placeholder={
+            chatEnabled
+              ? 'Ask anything grounded in this document...'
+              : 'Document not ready — fix OCR before asking questions'
+          }
           value={input}
           onChange={(event) => setInput(event.target.value)}
           onKeyDown={handleKeyPress}
-          disabled={loading}
+          disabled={loading || !chatEnabled}
         />
-        <button className="btn btn-primary icon-btn" onClick={() => sendMessage()} disabled={loading || !input.trim()}>
-          {loading ? (
+        <button
+          className="btn btn-primary icon-btn"
+          onClick={() => sendMessage()}
+          disabled={loading || !chatEnabled || !input.trim()}
+        >          {loading ? (
             <div className="loading-spinner small-spinner" />
           ) : (
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">

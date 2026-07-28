@@ -18,15 +18,20 @@ interface UploadedDocument {
   fileType: string;
   fileSize: number;
   uploadedAt: string;
+  status?: string;
   processing: {
+    status?: string;
     totalChunks: number;
     pages?: number;
     textLength: number;
     ocrUsed: boolean;
     embeddingsCreated: number;
-    indexStatus: 'Ready' | 'Failed';
-    retrievalStatus: 'Passed' | 'Weak' | 'Failed';
+    grounded?: boolean;
+    indexStatus: string;
+    retrievalStatus: string;
     estimatedConfidence: number;
+    errorCode?: string;
+    userMessage?: string;
   };
 }
 
@@ -189,11 +194,23 @@ export default function DocumentUpload({ onDocumentUploaded }: DocumentUploadPro
         await wait(MIN_ANALYSIS_DELAY_MS - elapsed);
       }
 
-      showToast({
-        type: 'success',
-        title: 'Document ready',
-        message: `"${file.name}" is indexed and ready to chat.`,
-      });
+      const status = data.status || data.processing?.status;
+      if (status === 'ocr_failed' || status === 'needs_attention') {
+        showToast({
+          type: 'error',
+          title: status === 'ocr_failed' ? 'OCR failed' : 'Needs attention',
+          message:
+            data.processing?.userMessage ||
+            data.message ||
+            'We could not reliably read text from this upload.',
+        });
+      } else {
+        showToast({
+          type: 'success',
+          title: 'Document ready',
+          message: `"${file.name}" is indexed and ready to chat.`,
+        });
+      }
       onDocumentUploaded(data);
     } catch (err) {
       console.error('Upload error:', err);

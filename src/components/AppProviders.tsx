@@ -10,8 +10,9 @@ export default function AppProviders({ children }: { children: React.ReactNode }
   const [booting, setBooting] = useState<boolean | null>(null);
 
   useEffect(() => {
-    const seen = sessionStorage.getItem(STORAGE_KEY);
-    setBooting(seen !== '1');
+    // sessionStorage is only available after mount
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional client boot gate
+    setBooting(sessionStorage.getItem(STORAGE_KEY) !== '1');
   }, []);
 
   const handleComplete = useCallback(() => {
