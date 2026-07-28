@@ -2,6 +2,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import DocumentAnalysisLoader, { AnalysisStep } from './DocumentAnalysisLoader';
+import UploadToastNotice from './UploadToastNotice';
 
 interface Source {
   chunkId: string;
@@ -215,7 +216,7 @@ export default function ChatInterface({ documentId, documentName }: ChatInterfac
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const [toast, setToast] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ title: string; message: string } | null>(null);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -225,8 +226,8 @@ export default function ChatInterface({ documentId, documentName }: ChatInterfac
   );
 
   const showToast = (message: string) => {
-    setToast(message);
-    setTimeout(() => setToast(null), 4000);
+    setToast({ title: 'Something went wrong', message });
+    setTimeout(() => setToast(null), 5200);
   };
 
   useEffect(() => {
@@ -358,14 +359,12 @@ export default function ChatInterface({ documentId, documentName }: ChatInterfac
   return (
     <section className="glass-card chat-container">
       {toast && (
-        <div className="toast toast-error">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <circle cx="12" cy="12" r="10" />
-            <path d="M12 8v4" />
-            <path d="M12 16h.01" />
-          </svg>
-          <span>{toast}</span>
-        </div>
+        <UploadToastNotice
+          type="error"
+          title={toast.title}
+          message={toast.message}
+          onDismiss={() => setToast(null)}
+        />
       )}
 
       <div className="chat-header">

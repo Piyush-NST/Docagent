@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useCallback, useRef, useState } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
 import DocumentAnalysisLoader, { AnalysisStep } from './DocumentAnalysisLoader';
 import UploadToastNotice from './UploadToastNotice';
 import {
@@ -87,7 +88,10 @@ function getUserFriendlyError(error: string): UploadToast {
         type: 'error',
         title: key.toLowerCase().includes('large') || key === 'FILE_TOO_LARGE' ? 'File limit reached' : 'Upload failed',
         message,
-        details: key.toLowerCase().includes('large') || key === 'FILE_TOO_LARGE' ? undefined : `Supported uploads: ${SUPPORTED_UPLOAD_LABEL}, up to ${MAX_UPLOAD_LABEL}.`,
+        details:
+          key.toLowerCase().includes('large') || key === 'FILE_TOO_LARGE'
+            ? undefined
+            : `Supported uploads: ${SUPPORTED_UPLOAD_LABEL}, up to ${MAX_UPLOAD_LABEL}.`,
         limitLabel: MAX_UPLOAD_LABEL,
       };
     }
@@ -106,6 +110,7 @@ export default function DocumentUpload({ onDocumentUploaded }: DocumentUploadPro
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [previewName, setPreviewName] = useState<string | null>(null);
   const [toast, setToast] = useState<UploadToast | null>(null);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
 
@@ -114,11 +119,14 @@ export default function DocumentUpload({ onDocumentUploaded }: DocumentUploadPro
     setTimeout(() => setToast(null), nextToast.type === 'error' ? 7200 : 4200);
   };
 
-  const handleDragOver = useCallback((event: React.DragEvent) => {
-    event.preventDefault();
-    if (isUploading) return;
-    setIsDragging(true);
-  }, [isUploading]);
+  const handleDragOver = useCallback(
+    (event: React.DragEvent) => {
+      event.preventDefault();
+      if (isUploading) return;
+      setIsDragging(true);
+    },
+    [isUploading],
+  );
 
   const handleDragLeave = useCallback((event: React.DragEvent) => {
     event.preventDefault();
@@ -137,6 +145,7 @@ export default function DocumentUpload({ onDocumentUploaded }: DocumentUploadPro
       return;
     }
 
+    setPreviewName(file.name);
     setIsUploading(true);
     setToast(null);
     setAnalysisError(null);
@@ -201,18 +210,22 @@ export default function DocumentUpload({ onDocumentUploaded }: DocumentUploadPro
       window.clearTimeout(uploadTimeout);
       if (fileInputRef.current) fileInputRef.current.value = '';
       setIsUploading(false);
+      setPreviewName(null);
     }
   };
 
-  const handleDrop = useCallback((event: React.DragEvent) => {
-    event.preventDefault();
-    setIsDragging(false);
-    if (isUploading) return;
+  const handleDrop = useCallback(
+    (event: React.DragEvent) => {
+      event.preventDefault();
+      setIsDragging(false);
+      if (isUploading) return;
 
-    const files = event.dataTransfer.files;
-    if (files.length > 0) uploadFile(files[0]);
+      const files = event.dataTransfer.files;
+      if (files.length > 0) uploadFile(files[0]);
+    },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isUploading]);
+    [isUploading],
+  );
 
   const handleFileSelect = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
@@ -221,7 +234,12 @@ export default function DocumentUpload({ onDocumentUploaded }: DocumentUploadPro
   }, []);
 
   return (
-    <section className="glass-card upload-card">
+    <motion.section
+      className="upload-card-premium"
+      initial={{ opacity: 0, y: 14 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
+    >
       {toast && (
         <UploadToastNotice
           type={toast.type}
@@ -240,8 +258,8 @@ export default function DocumentUpload({ onDocumentUploaded }: DocumentUploadPro
         <p>Drop a file into the assistant workspace.</p>
       </div>
 
-      <div
-        className={`upload-zone ${isDragging ? 'dragover' : ''} ${isUploading ? 'uploading' : ''}`}
+      <motion.div
+        className={`upload-zone-premium ${isDragging ? 'dragover' : ''} ${isUploading ? 'uploading' : ''}`}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
@@ -255,6 +273,8 @@ export default function DocumentUpload({ onDocumentUploaded }: DocumentUploadPro
             fileInputRef.current?.click();
           }
         }}
+        whileHover={!isUploading ? { scale: 1.005 } : undefined}
+        transition={{ type: 'spring', stiffness: 320, damping: 24 }}
       >
         <input
           ref={fileInputRef}
@@ -266,36 +286,62 @@ export default function DocumentUpload({ onDocumentUploaded }: DocumentUploadPro
           disabled={isUploading}
         />
 
-        <div className="upload-icon">
+        <AnimatePresence mode="wait">
           {isUploading ? (
-            <div className="analysis-mini-mark" />
+            <motion.div
+              key="loader"
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              style={{ width: '100%' }}
+            >
+              {previewName ? (
+                <motion.p
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  style={{ marginBottom: 12, color: '#a1a1aa', fontSize: '0.85rem', textAlign: 'left' }}
+                >
+                  Processing <strong style={{ color: '#fafafa' }}>{previewName}</strong>
+                </motion.p>
+              ) : null}
+              <DocumentAnalysisLoader
+                steps={uploadAnalysisSteps}
+                title="Preparing your document"
+                mode="upload"
+                error={analysisError}
+              />
+            </motion.div>
           ) : (
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
-              <path d="M14 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7z" />
-              <path d="M14 2v5h5" />
-              <path d="M12 17V9" />
-              <path d="m9 12 3-3 3 3" />
-            </svg>
-          )}
-        </div>
+            <motion.div
+              key="idle"
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+            >
+              <motion.div
+                className="upload-icon-premium"
+                animate={{ y: [0, -6, 0] }}
+                transition={{ duration: 3.2, repeat: Infinity, ease: 'easeInOut' }}
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
+                  <path d="M14 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7z" />
+                  <path d="M14 2v5h5" />
+                  <path d="M12 17V9" />
+                  <path d="m9 12 3-3 3 3" />
+                </svg>
+              </motion.div>
 
-        {isUploading ? (
-          <DocumentAnalysisLoader
-            steps={uploadAnalysisSteps}
-            title="Preparing your document"
-            mode="upload"
-            error={analysisError}
-          />
-        ) : (
-          <div className="upload-copy">
-            <strong>Drop files here</strong>
-            <span>{SUPPORTED_UPLOAD_LABEL} up to {MAX_UPLOAD_LABEL}</span>
-            <button type="button" className="btn btn-secondary" tabIndex={-1}>
-              Browse Files
-            </button>
-          </div>
-        )}
-      </div>
-    </section>
+              <div className="upload-copy-premium">
+                <strong>Drop files here</strong>
+                <span>
+                  {SUPPORTED_UPLOAD_LABEL} up to {MAX_UPLOAD_LABEL}
+                </span>
+                <span className="upload-browse">Browse Files</span>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </motion.div>
+    </motion.section>
   );
 }

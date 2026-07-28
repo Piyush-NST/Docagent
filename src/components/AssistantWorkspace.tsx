@@ -110,7 +110,7 @@ export default function AssistantWorkspace() {
       <section className="workspace-page-header animate-rise">
         <div>
           <span className="eyebrow">Assistant Workspace</span>
-          <h1>Document command center</h1>
+          <h1>Document intelligence</h1>
           <p>Upload files, manage indexed documents, and ask grounded questions with source-aware answers.</p>
         </div>
         <div className="workspace-header-actions">
