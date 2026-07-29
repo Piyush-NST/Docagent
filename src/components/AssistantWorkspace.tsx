@@ -6,6 +6,7 @@ import ChatInterface from '@/components/ChatInterface';
 import DocumentReadinessPanel, { DocumentReadiness } from '@/components/DocumentReadinessPanel';
 import DocumentList from '@/components/DocumentList';
 import DocumentUpload from '@/components/DocumentUpload';
+import type { DocumentProcessingStatus } from '@/lib/document-status';
 
 interface UploadedDocument {
   documentId: string;
@@ -13,15 +14,20 @@ interface UploadedDocument {
   fileType: string;
   fileSize: number;
   uploadedAt: string;
+  status?: DocumentProcessingStatus | string;
   processing: {
+    status?: DocumentProcessingStatus | string;
     totalChunks: number;
     pages?: number;
     textLength: number;
     ocrUsed: boolean;
     embeddingsCreated: number;
-    indexStatus: 'Ready' | 'Failed';
-    retrievalStatus: 'Passed' | 'Weak' | 'Failed';
+    grounded?: boolean;
+    indexStatus: string;
+    retrievalStatus: string;
     estimatedConfidence: number;
+    errorCode?: string;
+    userMessage?: string;
   };
 }
 
@@ -30,7 +36,31 @@ interface Document {
   fileName: string;
   chunkCount: number;
   fileType?: string;
+  status?: DocumentProcessingStatus | string;
   readiness?: DocumentReadiness;
+}
+
+function mapProcessingToReadiness(
+  fileSize: number,
+  processing: UploadedDocument['processing'],
+  status?: string,
+): DocumentReadiness {
+  const nextStatus = (processing.status || status || 'ready') as DocumentProcessingStatus;
+  return {
+    status: nextStatus,
+    fileSize,
+    textLength: processing.textLength,
+    pages: processing.pages,
+    totalChunks: processing.totalChunks,
+    embeddingsCreated: processing.embeddingsCreated,
+    ocrUsed: processing.ocrUsed,
+    grounded: processing.grounded,
+    indexStatus: processing.indexStatus,
+    retrievalStatus: processing.retrievalStatus,
+    estimatedConfidence: processing.estimatedConfidence,
+    errorCode: processing.errorCode,
+    userMessage: processing.userMessage,
+  };
 }
 
 export default function AssistantWorkspace() {
@@ -49,12 +79,31 @@ export default function AssistantWorkspace() {
 
       if (data.documents) {
         setDocuments(
-          data.documents.map((doc: { documentId: string; fileName: string; chunkCount: number; fileType?: string }) => ({
-            documentId: doc.documentId,
-            fileName: doc.fileName,
-            chunkCount: doc.chunkCount,
-            fileType: doc.fileType,
-          })),
+          data.documents.map(
+            (doc: {
+              documentId: string;
+              fileName: string;
+              chunkCount: number;
+              fileType?: string;
+              status?: string;
+              readiness?: DocumentReadiness;
+            }) => ({
+              documentId: doc.documentId,
+              fileName: doc.fileName,
+              chunkCount: doc.status === 'ocr_failed' ? 0 : doc.chunkCount,
+              fileType: doc.fileType,
+              status: doc.status,
+              readiness: doc.readiness
+                ? {
+                    ...doc.readiness,
+                    textLength: doc.status === 'ocr_failed' ? 0 : doc.readiness.textLength ?? 0,
+                    totalChunks: doc.status === 'ocr_failed' ? 0 : doc.readiness.totalChunks ?? doc.chunkCount,
+                    embeddingsCreated:
+                      doc.status === 'ocr_failed' ? 0 : doc.readiness.embeddingsCreated ?? 0,
+                  }
+                : undefined,
+            }),
+          ),
         );
       }
     } catch (err) {
@@ -65,25 +114,20 @@ export default function AssistantWorkspace() {
   };
 
   const handleDocumentUploaded = (doc: UploadedDocument) => {
+    const readiness = mapProcessingToReadiness(doc.fileSize, doc.processing, doc.status);
     const newDoc: Document = {
       documentId: doc.documentId,
       fileName: doc.fileName,
       chunkCount: doc.processing.totalChunks,
       fileType: doc.fileType,
-      readiness: {
-        fileSize: doc.fileSize,
-        textLength: doc.processing.textLength,
-        pages: doc.processing.pages,
-        totalChunks: doc.processing.totalChunks,
-        embeddingsCreated: doc.processing.embeddingsCreated,
-        ocrUsed: doc.processing.ocrUsed,
-        indexStatus: doc.processing.indexStatus,
-        retrievalStatus: doc.processing.retrievalStatus,
-        estimatedConfidence: doc.processing.estimatedConfidence,
-      },
+      status: readiness.status,
+      readiness,
     };
 
-    setDocuments((prev) => [...prev, newDoc]);
+    setDocuments((prev) => {
+      const without = prev.filter((item) => item.documentId !== newDoc.documentId);
+      return [...without, newDoc];
+    });
     setSelectedDoc(newDoc);
   };
 
@@ -105,12 +149,14 @@ export default function AssistantWorkspace() {
     }
   };
 
+  const documentReady = selectedDoc?.status === 'ready' || selectedDoc?.readiness?.status === 'ready';
+
   return (
     <>
       <section className="workspace-page-header animate-rise">
         <div>
           <span className="eyebrow">Assistant Workspace</span>
-          <h1>Document command center</h1>
+          <h1>Document intelligence</h1>
           <p>Upload files, manage indexed documents, and ask grounded questions with source-aware answers.</p>
         </div>
         <div className="workspace-header-actions">
@@ -137,9 +183,17 @@ export default function AssistantWorkspace() {
 
         <div className="right-rail">
           {selectedDoc?.readiness && (
-            <DocumentReadinessPanel fileName={selectedDoc.fileName} readiness={selectedDoc.readiness} />
+            <DocumentReadinessPanel
+              fileName={selectedDoc.fileName}
+              readiness={selectedDoc.readiness}
+            />
           )}
-          <ChatInterface documentId={selectedDoc?.documentId || null} documentName={selectedDoc?.fileName} />
+          <ChatInterface
+            documentId={selectedDoc?.documentId || null}
+            documentName={selectedDoc?.fileName}
+            documentReady={Boolean(documentReady)}
+            documentStatus={selectedDoc?.status || selectedDoc?.readiness?.status}
+          />
         </div>
       </section>
     </>

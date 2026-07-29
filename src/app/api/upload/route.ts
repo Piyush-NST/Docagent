@@ -4,6 +4,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { uploadDocument, ensureContainerExists } from '@/lib/azure-blob';
 import { processDocument } from '@/lib/document-processor';
 import { storeDocumentChunks } from '@/lib/vector-store';
+import { upsertDocumentRecord } from '@/lib/document-registry';
+import { buildFailedOcrReadiness, buildReadyReadiness, isDocumentReady } from '@/lib/document-status';
 import {
   MAX_UPLOAD_BYTES,
   MAX_UPLOAD_LABEL,
@@ -18,28 +20,6 @@ const STORAGE_TIMEOUT_MS = 20_000;
 const RECEIVE_FILE_TIMEOUT_MS = 45_000;
 const DOCUMENT_PROCESSING_TIMEOUT_MS = 75_000;
 const EMBEDDING_TIMEOUT_MS = 30_000;
-
-function getRetrievalStatus(textLength: number, totalChunks: number, embeddingsCreated: number): 'Passed' | 'Weak' | 'Failed' {
-  if (totalChunks === 0 || embeddingsCreated === 0) return 'Failed';
-  if (embeddingsCreated < totalChunks || textLength < 180) return 'Weak';
-  return 'Passed';
-}
-
-function getEstimatedConfidence(
-  textLength: number,
-  totalChunks: number,
-  embeddingsCreated: number,
-  retrievalStatus: 'Passed' | 'Weak' | 'Failed'
-): number {
-  if (retrievalStatus === 'Failed') return 12;
-
-  let score = retrievalStatus === 'Passed' ? 62 : 38;
-  score += Math.min(18, Math.floor(textLength / 900) * 3);
-  score += Math.min(12, totalChunks * 2);
-  score += embeddingsCreated >= totalChunks ? 8 : -8;
-
-  return Math.max(10, Math.min(96, score));
-}
 
 class UploadStepTimeoutError extends Error {
   status = 504;
@@ -69,7 +49,7 @@ export async function POST(request: NextRequest) {
     await withTimeout(
       ensureContainerExists(),
       STORAGE_TIMEOUT_MS,
-      'Preparing document storage took too long. Please try again.'
+      'Preparing document storage took too long. Please try again.',
     );
 
     const contentLength = Number(request.headers.get('content-length') || 0);
@@ -83,14 +63,14 @@ export async function POST(request: NextRequest) {
           actualSize: contentLength,
           guidance: 'Compress the file, split it into smaller documents, or upload only the pages you want to ask about.',
         },
-        { status: 413 }
+        { status: 413 },
       );
     }
 
     const formData = await withTimeout(
       request.formData(),
       RECEIVE_FILE_TIMEOUT_MS,
-      'Receiving the uploaded file took too long. Please try a smaller file or selected pages.'
+      'Receiving the uploaded file took too long. Please try a smaller file or selected pages.',
     );
     const file = formData.get('file') as File | null;
 
@@ -100,26 +80,27 @@ export async function POST(request: NextRequest) {
 
     if (!SUPPORTED_UPLOAD_TYPES.includes(file.type as (typeof SUPPORTED_UPLOAD_TYPES)[number])) {
       return NextResponse.json(
-        { 
+        {
           error: 'File type not supported',
           message: `Please upload ${SUPPORTED_UPLOAD_LABEL} files.`,
         },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
     if (file.size > MAX_UPLOAD_BYTES) {
       return NextResponse.json(
-        { 
+        {
           error: 'FILE_TOO_LARGE',
           message: buildOversizedFileMessage(file.name, file.size),
           maxSize: MAX_UPLOAD_LABEL,
           maxBytes: MAX_UPLOAD_BYTES,
           actualSize: file.size,
           actualSizeLabel: formatBytes(file.size),
-          guidance: 'This project extracts and stores document text in memory during upload, so smaller files keep processing reliable.',
+          guidance:
+            'This project extracts and stores document text in memory during upload, so smaller files keep processing reliable.',
         },
-        { status: 413 }
+        { status: 413 },
       );
     }
 
@@ -130,30 +111,55 @@ export async function POST(request: NextRequest) {
     const metadata = await withTimeout(
       uploadDocument(buffer, file.name, file.type),
       STORAGE_TIMEOUT_MS,
-      'Saving the uploaded file took too long. Please try again with a smaller file.'
+      'Saving the uploaded file took too long. Please try again with a smaller file.',
     );
 
     console.log('Processing document...');
     const processedDoc = await withTimeout(
       processDocument(metadata.documentId, buffer, file.name, file.type),
       DOCUMENT_PROCESSING_TIMEOUT_MS,
-      'Reading this document took too long. Try compressing it, splitting it, or uploading selected pages.'
+      'Reading this document took too long. Try compressing it, splitting it, or uploading selected pages.',
     );
 
-    console.log('Generating embeddings...');
-    const embeddingsCreated = await withTimeout(
-      storeDocumentChunks(metadata.documentId, processedDoc.chunks),
-      EMBEDDING_TIMEOUT_MS,
-      'Indexing this document took too long. Please try a smaller file.'
-    );
+    let embeddingsCreated = 0;
 
-    const retrievalStatus = getRetrievalStatus(processedDoc.rawText.length, processedDoc.totalChunks, embeddingsCreated);
-    const estimatedConfidence = getEstimatedConfidence(
-      processedDoc.rawText.length,
-      processedDoc.totalChunks,
-      embeddingsCreated,
-      retrievalStatus
-    );
+    if (isDocumentReady(processedDoc.status) && processedDoc.chunks.length > 0) {
+      console.log('Generating embeddings...');
+      embeddingsCreated = await withTimeout(
+        storeDocumentChunks(metadata.documentId, processedDoc.chunks),
+        EMBEDDING_TIMEOUT_MS,
+        'Indexing this document took too long. Please try a smaller file.',
+      );
+    } else {
+      console.log('[OCR] Embedding creation skipped');
+    }
+
+    const readiness = isDocumentReady(processedDoc.status)
+      ? buildReadyReadiness({
+          fileSize: metadata.fileSize,
+          textLength: processedDoc.rawText.length,
+          chunksCreated: processedDoc.totalChunks,
+          embeddingsCreated,
+          ocrUsed: processedDoc.ocrUsed,
+          pages: processedDoc.pages,
+        })
+      : buildFailedOcrReadiness({
+          fileSize: metadata.fileSize,
+          ocrUsed: processedDoc.ocrUsed,
+          pages: processedDoc.pages,
+          errorCode: processedDoc.errorCode,
+          userMessage: processedDoc.userMessage,
+        });
+
+    upsertDocumentRecord({
+      documentId: metadata.documentId,
+      fileName: metadata.fileName,
+      fileType: metadata.fileType,
+      fileSize: metadata.fileSize,
+      uploadedAt: metadata.uploadedAt,
+      status: readiness.status,
+      readiness,
+    });
 
     console.log('Upload complete!');
 
@@ -164,29 +170,33 @@ export async function POST(request: NextRequest) {
       fileType: metadata.fileType,
       fileSize: metadata.fileSize,
       uploadedAt: metadata.uploadedAt,
+      status: readiness.status,
       processing: {
-        totalChunks: processedDoc.totalChunks,
-        pages: processedDoc.pages,
-        textLength: processedDoc.rawText.length,
-        ocrUsed: processedDoc.ocrUsed,
-        embeddingsCreated,
-        indexStatus: embeddingsCreated === processedDoc.totalChunks ? 'Ready' : 'Failed',
-        retrievalStatus,
-        estimatedConfidence,
+        status: readiness.status,
+        totalChunks: readiness.chunksCreated,
+        pages: readiness.pages,
+        textLength: readiness.extractedTextLength,
+        ocrUsed: readiness.ocrUsed,
+        embeddingsCreated: readiness.embeddingsCreated,
+        grounded: readiness.grounded,
+        indexStatus: readiness.indexStatus,
+        retrievalStatus: readiness.retrievalStatus,
+        estimatedConfidence: readiness.estimatedConfidence,
+        errorCode: readiness.errorCode,
+        userMessage: readiness.userMessage,
       },
-      message: 'Document uploaded successfully!',
+      message: readiness.status === 'ready' ? 'Document uploaded successfully!' : readiness.userMessage,
     });
-
   } catch (error) {
     console.error('Upload error:', error);
     const status = error instanceof UploadStepTimeoutError ? error.status : 500;
 
     return NextResponse.json(
-      { 
+      {
         error: 'Upload failed',
-        message: error instanceof Error ? error.message : 'Something went wrong'
+        message: error instanceof Error ? error.message : 'Something went wrong',
       },
-      { status }
+      { status },
     );
   }
 }

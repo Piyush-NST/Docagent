@@ -1,29 +1,28 @@
 # DocAgent - Document Q&A with AI
 
-A web app that lets you upload documents and ask questions about them. Uses Gemini for grounded answers and image OCR.
-🔗 **Live Demo**: https://docagent-ai-rag-system.vercel.app/
-<img width="1427" height="696" alt="Screenshot 2026-05-01 at 1 31 25 AM" src="https://github.com/user-attachments/assets/4a007575-fcfa-4b2d-9821-7a3021a59150" />
+A premium document intelligence app for uploading files and asking grounded questions. Uses Gemini for answers and image OCR.
 
+🔗 **Live Demo**: https://docagent-ai-rag-system.vercel.app/
 
 ## Features
 
 - Upload PDF, DOCX, and image files (PNG, JPG)
-- Ask questions about uploaded documents  
-- AI generates answers based only on document content (grounded responses)
-- Shows which page/section the answer came from
-- OCR support for scanned PDFs and images
-- Modern dark themed UI
-- Premium document-readiness metrics after upload
-- Structured answer cards with clean sections, source chips, and long-answer controls
+- Ask questions about uploaded documents
+- AI answers grounded in document content only
+- Page/section citations on replies
+- OCR for scanned PDFs and images
+- Premium dark SaaS UI (startup sequence, feature slider, glass upload)
+- Document-readiness metrics after upload
+- Structured answer cards with source chips
 
 ## Tech Stack
 
-- **Frontend**: Next.js 14, React, TypeScript
+- **Frontend**: Next.js, React, TypeScript, Framer Motion
 - **Backend**: Next.js API Routes
-- **AI/LLM**: Google Gemini (gemini-2.0-flash)
-- **OCR**: Google Gemini (gemini-2.0-flash) - for image text extraction
-- **Storage**: In-memory (can use Azure Blob if configured)
-- **Text Extraction**: unpdf for PDFs, mammoth for DOCX
+- **AI/LLM**: Google Gemini (`gemini-2.0-flash`)
+- **OCR**: Google Gemini Vision — image/scanned text extraction
+- **Storage**: In-memory (Azure Blob optional)
+- **Text Extraction**: `unpdf` for PDFs, `mammoth` for DOCX
 
 ## Getting Started
 
@@ -35,7 +34,7 @@ A web app that lets you upload documents and ask questions about them. Uses Gemi
 ### Installation
 
 ```bash
-cd doc-agent
+cd docagent-ai-rag-system
 
 npm install
 
@@ -61,69 +60,66 @@ Open http://localhost:3000
 
 ### 1. Upload
 
-User uploads an document. Gets stored in memory and assigned a unique ID.
+Upload a document. It is stored and assigned a unique ID.
 
 ### 2. Text Extraction
 
-- **PDF**: Uses `unpdf` library to extract text. If PDF is scanned (no text), falls back to OCR using Gemini Vision
-- **DOCX**: Uses `mammoth` library
-- **Images**: Uses Gemini Vision API for OCR
+- **PDF**: `unpdf` extraction; OCR fallback via Gemini Vision for scans
+- **DOCX**: `mammoth`
+- **Images**: Gemini Vision OCR
 
 ### 3. Chunking & Embedding
 
-Text is splitted into ~500 character chunks with overlap. Each chunk gets a local hash-based embedding for lightweight similarity search.
+Text is split into ~500 character chunks with overlap. Each chunk gets a local hash-based embedding for lightweight similarity search.
 
 ### 4. Question Answering
 
-When user asks a question:
-1. Find relevant chunks using similarity search
-2. Build prompt with chunks as context
+1. Find relevant chunks via similarity search
+2. Build a prompt with those chunks as context
 3. Send to Gemini with grounding instructions
-4. Return answer with source citations
+4. Return the answer with source citations
 
 ### 5. Grounding
 
-The AI only uses info from the document. If something isn't there, it says so instead of making stuff up.
+The model only uses document content. If something is not present, it says so instead of inventing an answer.
 
 ## Project Structure
 
 ```
-doc-agent/
+docagent-ai-rag-system/
 ├── src/
 │   ├── app/
 │   │   ├── api/
-│   │   │   ├── upload/route.ts    - handles file uploads
-│   │   │   ├── chat/route.ts      - handles Q&A
-│   │   │   └── documents/route.ts - list/delete docs
-│   │   ├── page.tsx               - main page
-│   │   └── globals.css            - styles
+│   │   │   ├── upload/route.ts
+│   │   │   ├── chat/route.ts
+│   │   │   └── documents/route.ts
+│   │   ├── page.tsx
+│   │   └── globals.css
 │   ├── components/
-│   │   ├── AssistantWorkspace.tsx - assistant shell
-│   │   ├── DocumentUpload.tsx     - drag & drop upload
-│   │   ├── ChatInterface.tsx      - chat UI
-│   │   ├── DocumentReadinessPanel.tsx - indexing quality metrics
-│   │   ├── DocumentAnalysisLoader.tsx - premium loading state
-│   │   └── DocumentList.tsx       - doc list
+│   │   ├── StartupScreen.tsx
+│   │   ├── FeatureSlider.tsx
+│   │   ├── AssistantWorkspace.tsx
+│   │   ├── DocumentUpload.tsx
+│   │   ├── ChatInterface.tsx
+│   │   └── …
 │   └── lib/
-│       ├── azure-blob.ts          - storage (in-memory or azure)
-│       ├── azure-openai.ts        - Gemini chat client & local embeddings
-│       ├── document-processor.ts  - text extraction & chunking
-│       └── vector-store.ts        - in-memory vector db
+│       ├── azure-blob.ts
+│       ├── azure-openai.ts
+│       ├── document-processor.ts
+│       └── vector-store.ts
 └── docs/
     └── ARCHITECTURE.md
 ```
 
 ## Example Questions
 
-After uploading try asking:
+After uploading, try:
 
 - "What is this document about?"
 - "Summarize the main points"
 - "What are the key findings?"
 - "Does it mention any numbers or dates?"
 
-<img width="1427" height="900" alt="Screenshot 2026-05-01 at 1 31 46 AM" src="https://github.com/user-attachments/assets/ce1ef12f-4cfc-4cde-b5e3-d8f5c7381a08" />
-
 ## Contributors
 
-- [Prerak Arya](https://github.com/prerak2612) - Creator and maintainer
+- [Prerak Arya](https://github.com/prerak2612) — Creator and maintainer

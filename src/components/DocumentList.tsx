@@ -8,6 +8,7 @@ interface Document {
   chunkCount: number;
   fileType?: string;
   uploadedAt?: string;
+  status?: string;
 }
 
 interface DocumentListProps {
@@ -18,19 +19,18 @@ interface DocumentListProps {
 }
 
 function getIcon(fileType?: string) {
-  if (fileType?.includes('pdf')) {
-    return 'PDF';
-  }
-
-  if (fileType?.includes('word') || fileType?.includes('docx')) {
-    return 'DOC';
-  }
-
-  if (fileType?.includes('image')) {
-    return 'IMG';
-  }
-
+  if (fileType?.includes('pdf')) return 'PDF';
+  if (fileType?.includes('word') || fileType?.includes('docx')) return 'DOC';
+  if (fileType?.includes('image')) return 'IMG';
   return 'DOC';
+}
+
+function metaLabel(doc: Document) {
+  if (doc.status === 'ocr_failed') return 'OCR failed · not indexed';
+  if (doc.status === 'needs_attention') return 'Needs attention';
+  if (doc.status === 'processing') return 'Processing…';
+  if (doc.chunkCount <= 0) return 'Not indexed';
+  return `${doc.chunkCount} indexed chunk${doc.chunkCount === 1 ? '' : 's'}`;
 }
 
 export default function DocumentList({
@@ -43,7 +43,6 @@ export default function DocumentList({
 
   const handleDelete = async (event: React.MouseEvent<HTMLButtonElement>, docId: string) => {
     event.stopPropagation();
-
     if (deleting) return;
 
     setDeleting(docId);
@@ -81,11 +80,12 @@ export default function DocumentList({
         <div className="document-list">
           {documents.map((doc) => {
             const isActive = selectedDocumentId === doc.documentId;
+            const failed = doc.status === 'ocr_failed';
 
             return (
               <div
                 key={doc.documentId}
-                className={`document-item ${isActive ? 'active' : ''}`}
+                className={`document-item ${isActive ? 'active' : ''} ${failed ? 'document-item-failed' : ''}`}
                 onClick={() => onSelectDocument(doc)}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' || event.key === ' ') {
@@ -98,7 +98,7 @@ export default function DocumentList({
                 <span className="document-icon">{getIcon(doc.fileType)}</span>
                 <span className="document-info">
                   <span className="document-name">{doc.fileName}</span>
-                  <span className="document-meta">{doc.chunkCount} indexed chunks</span>
+                  <span className={`document-meta ${failed ? 'document-meta-warn' : ''}`}>{metaLabel(doc)}</span>
                 </span>
                 {isActive && <span className="active-dot" aria-label="Selected document" />}
                 <button
