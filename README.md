@@ -119,7 +119,3 @@ After uploading, try:
 - "Summarize the main points"
 - "What are the key findings?"
 - "Does it mention any numbers or dates?"
-
-## Contributors
-
-- [Prerak Arya](https://github.com/prerak2612) — Creator and maintainer
