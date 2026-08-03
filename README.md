@@ -103,14 +103,27 @@ docagent-ai-rag-system/
 │   │   ├── ChatInterface.tsx
 │   │   └── …
 │   └── lib/
+│       ├── gemini.ts
 │       ├── azure-blob.ts
-│       ├── azure-openai.ts
 │       ├── document-processor.ts
-│       └── vector-store.ts
+│       ├── vector-store.ts
+│       └── store/          # postgres | file | memory persistence
 └── docs/
     └── ARCHITECTURE.md
 ```
 
+## Persistence (important for Vercel)
+
+- Local default: durable JSON under `.data/`
+- Production on Vercel: set `DATABASE_URL` (Postgres / Neon). Schema auto-applies on first use (`db/migrations/001_init.sql`).
+- Without `DATABASE_URL` on Vercel, upload/chat return `503 PERSISTENCE_UNAVAILABLE` (no silent in-memory fallback).
+
+## AI provider
+
+DocAgent uses **Google Gemini only** (`src/lib/gemini.ts`):
+
+- Chat + OCR: `GEMINI_MODEL`
+- Semantic embeddings: `GEMINI_EMBEDDING_MODEL` (default `gemini-embedding-001`)
 ## Example Questions
 
 After uploading, try:

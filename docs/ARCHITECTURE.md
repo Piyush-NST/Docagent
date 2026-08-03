@@ -2,101 +2,97 @@
 
 ## Overview
 
-DocAgent uses RAG (Retrieval Augmented Generation) to answer questions about documents. We extract text, chunk it, and use those chunks as context when generating answers.
+DocAgent is a grounded document intelligence system. It validates whether a document was actually readable, persists metadata + chunks, retrieves evidence with hybrid ranking, then asks Gemini to answer only from that evidence.
 
-## Current Implementation
-
-```
-User --> [Next.js Frontend] --> [API Routes]
-                                    |
-                                    v
-                            [Document Processing]
-                                    |
-                    +---------------+---------------+
-                    |               |               |
-                    v               v               v
-             [In-Memory Store]  [Vector Store]    [Gemini LLM]
-             (document files)   (chunks + embed)  (chat responses)
-                                    |
-                                    v
-                              [Gemini Vision]
-                              (OCR for images)
-```
-
-## Components
-
-### Frontend
-
-- **page.tsx**: Main layout with state management
-- **DocumentUpload.tsx**: Drag & drop file upload with toast notifications
-- **ChatInterface.tsx**: Chat UI showing messages and sources
-- **DocumentList.tsx**: List of uploaded documents
-
-### API Routes
-
-- **/api/upload**: Receives file, extracts text, chunks it, stores embeddings
-- **/api/chat**: Takes question, finds relevant chunks, calls Gemini, returns answer
-- **/api/documents**: List all docs or delete a doc
-
-### Libraries
-
-- **azure-blob.ts**: Storage layer. Uses in-memory Map by default. Can switch to Azure Blob if connection string provided.
-- **azure-openai.ts**: AI client. Uses Gemini for chat responses (`GEMINI_MODEL`, default `gemini-2.0-flash`) and local hash-based embeddings for lightweight retrieval.
-- **document-processor.ts**: Extracts text from PDF (unpdf), DOCX (mammoth), images (Gemini Vision OCR). Chunks text into ~500 char pieces.
-- **vector-store.ts**: Stores chunks with embeddings in memory. Does similarity search to find relevant chunks.
-
-## How Processing Works
-
-### Upload Flow
-
-1. File comes in via FormData
-2. Store original file (in-memory or Azure Blob)
-3. Extract text based on file type:
-   - PDF: try unpdf first, if scanned use Gemini OCR on each page
-   - DOCX: use mammoth
-   - Image: use Gemini Vision
-4. Split text into chunks (~500 chars, 50 char overlap)
-5. Generate embedding for each chunk (local hash method)
-6. Store chunks in vector store
-7. Return success with doc ID
-
-### Chat Flow
-
-1. User sends question + document ID
-2. Search vector store for relevant chunks (top 5)
-3. If small document, just use all chunks
-4. Build prompt with chunks as context
-5. Call Gemini with grounding instructions
-6. Return answer + source references
-
-## Why These Choices
-
-### Why Gemini?
-- Free tier
-- Good text and vision models
-- One provider supports both grounded answers and OCR fallback
-
-### Why local embeddings?
-- Hash-based method works ok for small docs
-- For production would use OpenAI or Gemini embeddings
-
-### Why in-memory storage?
-- Simple for prototype
-- No database setup needed
-- For production would use Azure AI Search or similar
-
-## Chunk Size
-
-Using 500 chars with 50 char overlap because:
-- Small enough to be specific
-- Large enough to have context
-- Overlap prevents cutting sentences
-
-## Files That Matter
+## Pipeline
 
 ```
-src/lib/azure-openai.ts    - Gemini client, embedding function
-src/lib/document-processor.ts - text extraction, ocr, chunking
-src/lib/vector-store.ts    - chunk storage and search
-src/app/api/chat/route.ts  - main q&a logic
+Browser
+↓
+Next.js API
+↓
+Validation + content hash
+↓
+Document Processor
+├─ native page extraction
+└─ OCR fallback (budgeted)
+↓
+Usable-text validation
+↓
+Readiness calculation
+↓
+Persistent Document / Chunk Store
+├─ Postgres (DATABASE_URL) — required on Vercel
+└─ File store (.data/) — local default
+↓
+Gemini embeddings (gemini-embedding-001) + lexical tokens
+↓
+Hybrid Retriever
+↓
+Evidence
+↓
+Gemini grounded generation
+↓
+Answer + citations (from retrieved evidence only)
 ```
+
+## What persists
+
+| Data | Where |
+|------|--------|
+| Document metadata / readiness / hash | Postgres or `.data/documents` |
+| Chunks + embeddings + page metadata | Postgres or `.data/chunks` |
+| Original binaries | Azure Blob (if configured) or `.data/blobs` |
+
+## Serverless behavior
+
+- Document registry and vector index are **not** process memory in normal operation.
+- On **Vercel**, `DATABASE_URL` is required. Without it, APIs return `503 PERSISTENCE_UNAVAILABLE`.
+- Local/dev defaults to durable JSON under `.data/` (survives process restart on the same machine).
+- `DOCAGENT_STORAGE=memory` is for tests only.
+
+## AI provider
+
+DocAgent uses **Google Gemini only**:
+
+- Chat / grounding: `GEMINI_MODEL` (default `gemini-2.0-flash`) via `src/lib/gemini.ts`
+- OCR: same chat model (vision) via `document-processor.ts`
+- Embeddings: `GEMINI_EMBEDDING_MODEL` (default `gemini-embedding-001`)
+
+There is no active Azure OpenAI / OpenAI chat path. API keys are server-side only.
+
+## Retrieval
+
+1. Embed the query with Gemini (`RETRIEVAL_QUERY`)
+2. Cosine similarity vs stored chunk embeddings
+3. Lexical token overlap
+4. Hybrid blend (`src/lib/config/retrieval.ts`)
+5. Near-duplicate dedupe
+6. COMPARE mode: diversify evidence across selected documents
+7. If embeddings unavailable → lexical-only (reported as `retrievalMode`)
+
+## Readiness
+
+| Status | Meaning |
+|--------|---------|
+| Ready | High processing coverage, indexed |
+| Ready with warnings | Mostly usable; some pages incomplete |
+| Limited | Usable content exists but coverage too low for whole-document claims |
+| Failed / OCR Failed | No reliable content |
+
+Thresholds live in `src/lib/config/readiness.ts`.
+
+OCR skipped (budget) is tracked separately from OCR failed.
+
+## Security notes
+
+- No multi-user auth / tenant isolation — single shared workspace.
+- Document text is treated as untrusted data in prompts.
+- Persistence errors never return raw SQL / connection strings to the client.
+
+## Limitations
+
+- Embedding API cost/latency on large uploads
+- OCR page budget (`DOCAGENT_MAX_OCR_PAGES`)
+- Complex DOCX tables may still flatten
+- File store is not multi-instance safe (use Postgres on Vercel)

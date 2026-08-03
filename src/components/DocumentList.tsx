@@ -27,7 +27,10 @@ function getIcon(fileType?: string) {
 
 function metaLabel(doc: Document) {
   if (doc.status === 'ocr_failed') return 'OCR failed · not indexed';
+  if (doc.status === 'limited') return 'Limited coverage';
+  if (doc.status === 'ready_with_warnings') return 'Ready with warnings';
   if (doc.status === 'needs_attention') return 'Needs attention';
+  if (doc.status === 'failed') return 'Failed';
   if (doc.status === 'processing') return 'Processing…';
   if (doc.chunkCount <= 0) return 'Not indexed';
   return `${doc.chunkCount} indexed chunk${doc.chunkCount === 1 ? '' : 's'}`;
@@ -80,7 +83,11 @@ export default function DocumentList({
         <div className="document-list">
           {documents.map((doc) => {
             const isActive = selectedDocumentId === doc.documentId;
-            const failed = doc.status === 'ocr_failed';
+            const failed = doc.status === 'ocr_failed' || doc.status === 'failed';
+            const warn =
+              doc.status === 'ready_with_warnings' ||
+              doc.status === 'needs_attention' ||
+              doc.status === 'limited';
 
             return (
               <div
@@ -98,7 +105,7 @@ export default function DocumentList({
                 <span className="document-icon">{getIcon(doc.fileType)}</span>
                 <span className="document-info">
                   <span className="document-name">{doc.fileName}</span>
-                  <span className={`document-meta ${failed ? 'document-meta-warn' : ''}`}>{metaLabel(doc)}</span>
+                  <span className={`document-meta ${failed || warn ? 'document-meta-warn' : ''}`}>{metaLabel(doc)}</span>
                 </span>
                 {isActive && <span className="active-dot" aria-label="Selected document" />}
                 <button

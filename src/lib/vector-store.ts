@@ -1,21 +1,14 @@
-// stores document chunks in memory for searching
+/**
+ * Document chunk indexing + hybrid retrieval over the persistent store.
+ */
 
-import { cosineSimilarity, generateEmbedding } from './azure-openai';
 import { DocumentChunk } from './document-processor';
-
-export interface StoredChunk {
-  id: string;
-  documentId: string;
-  content: string;
-  embedding: number[];
-  page?: number;
-  section?: string;
-  metadata: {
-    fileName: string;
-    fileType: string;
-    extractedAt: string;
-  };
-}
+import { cosineSimilarity, generateEmbedding, generateQueryEmbedding } from './gemini';
+import { EMBEDDING_MODEL } from './config/readiness';
+import { RETRIEVAL_CONFIG, type RetrievalMode } from './config/retrieval';
+import { dedupeByContent, diversifyByDocument, hybridScore, lexicalScore, tokenize } from './retrieval';
+import { getStore } from './store';
+import type { PersistedChunk } from './store/types';
 
 export interface SearchResult {
   id: string;
@@ -31,165 +24,195 @@ export interface SearchResult {
   };
 }
 
-const globalForVectorStore = globalThis as typeof globalThis & {
-  __docAgentVectorStore?: Map<string, StoredChunk[]>;
-};
+export interface SearchOutcome {
+  results: SearchResult[];
+  retrievalMode: RetrievalMode;
+}
 
-const vectorStore = globalForVectorStore.__docAgentVectorStore ?? new Map<string, StoredChunk[]>();
-globalForVectorStore.__docAgentVectorStore = vectorStore;
+function toSearchResult(chunk: PersistedChunk, relevance: number): SearchResult {
+  return {
+    id: chunk.id,
+    documentId: chunk.documentId,
+    content: chunk.content,
+    page: chunk.page,
+    section: chunk.section,
+    relevance,
+    metadata: {
+      fileName: chunk.fileName,
+      fileType: chunk.fileType,
+      extractedAt: chunk.extractedAt,
+    },
+  };
+}
 
 export async function storeDocumentChunks(
   documentId: string,
-  chunks: DocumentChunk[]
-): Promise<number> {
-  console.log(`Storing ${chunks.length} chunks for doc ${documentId}`);
-  
-  const storedChunks: StoredChunk[] = [];
+  chunks: DocumentChunk[],
+): Promise<{ embeddingsCreated: number; retrievalMode: RetrievalMode }> {
+  console.log(`Indexing ${chunks.length} chunks for doc ${documentId}`);
+  const store = getStore();
+  const persisted: PersistedChunk[] = [];
+  let embeddingsCreated = 0;
+  let anyEmbeddingFailed = false;
 
   for (const chunk of chunks) {
-    try {
-      const embedding = await generateEmbedding(chunk.content);
-      
-      storedChunks.push({
-        id: chunk.id,
-        documentId: chunk.documentId,
-        content: chunk.content,
-        embedding,
-        page: chunk.page,
-        section: chunk.section,
-        metadata: chunk.metadata,
-      });
-    } catch (err) {
-      console.error(`Failed to embed chunk ${chunk.id}:`, err);
+    const embedded = await generateEmbedding(chunk.content);
+    if (embedded?.embedding?.length) {
+      embeddingsCreated += 1;
+    } else {
+      anyEmbeddingFailed = true;
     }
+
+    persisted.push({
+      id: chunk.id,
+      documentId: chunk.documentId,
+      content: chunk.content,
+      page: chunk.page,
+      section: chunk.section,
+      chunkIndex: chunk.chunkIndex,
+      embedding: embedded?.embedding ?? null,
+      embeddingModel: embedded?.model ?? null,
+      fileName: chunk.metadata.fileName,
+      fileType: chunk.metadata.fileType,
+      extractedAt: chunk.metadata.extractedAt,
+      lexicalText: tokenize(chunk.content).join(' '),
+    });
   }
 
-  vectorStore.set(documentId, storedChunks);
-  console.log(`Stored ${storedChunks.length} embeddings`);
-  return storedChunks.length;
+  await store.replaceChunks(documentId, persisted);
+  console.log(`Persisted ${persisted.length} chunks (${embeddingsCreated} embeddings)`);
+
+  return {
+    embeddingsCreated,
+    retrievalMode: anyEmbeddingFailed || embeddingsCreated === 0 ? 'lexical_only' : 'hybrid',
+  };
 }
 
-// finds relevant chunks for a question
+async function rankChunks(
+  chunks: PersistedChunk[],
+  query: string,
+  topK: number,
+  options?: { diversifyDocumentIds?: string[] },
+): Promise<SearchOutcome> {
+  if (!chunks.length) return { results: [], retrievalMode: 'lexical_only' };
+
+  const queryEmbedding = await generateQueryEmbedding(query);
+  const compatibleModel = queryEmbedding && !queryEmbedding.degraded ? EMBEDDING_MODEL : null;
+  const canUseSemantic = Boolean(
+    queryEmbedding?.embedding?.length &&
+      chunks.some(
+        (c) =>
+          c.embedding &&
+          c.embedding.length === queryEmbedding!.embedding.length &&
+          (c.embeddingModel === compatibleModel || c.embeddingModel === 'mock-embedding'),
+      ),
+  );
+
+  const retrievalMode: RetrievalMode = canUseSemantic ? 'hybrid' : 'lexical_only';
+  if (retrievalMode === 'lexical_only') {
+    console.log('[Retrieval] Semantic unavailable — using lexical-only ranking');
+  }
+
+  const scored = chunks.map((chunk) => {
+    const lexical = lexicalScore(query, chunk.content);
+    let semantic = 0;
+    if (
+      canUseSemantic &&
+      queryEmbedding &&
+      chunk.embedding &&
+      chunk.embedding.length === queryEmbedding.embedding.length
+    ) {
+      semantic = cosineSimilarity(queryEmbedding.embedding, chunk.embedding);
+    }
+    const relevance = canUseSemantic ? hybridScore(semantic, lexical) : lexical;
+    return toSearchResult(chunk, relevance);
+  });
+
+  scored.sort((a, b) => b.relevance - a.relevance);
+
+  const minScore =
+    retrievalMode === 'hybrid'
+      ? RETRIEVAL_CONFIG.minHybridRelevance
+      : RETRIEVAL_CONFIG.minLexicalFallback;
+
+  const filtered = scored.filter((item) => item.relevance >= minScore);
+  const pool = filtered.length > 0 ? filtered : scored.slice(0, Math.min(topK, scored.length));
+  let results = dedupeByContent(pool);
+
+  if (options?.diversifyDocumentIds && options.diversifyDocumentIds.length > 1) {
+    results = diversifyByDocument(results, options.diversifyDocumentIds, topK);
+  } else {
+    results = results.slice(0, topK);
+  }
+
+  return { results, retrievalMode };
+}
+
 export async function searchDocument(
   documentId: string,
   query: string,
-  topK: number = 5,
-  minRelevance: number = 0.1
-): Promise<SearchResult[]> {
-  const chunks = vectorStore.get(documentId);
-  
-  if (!chunks || chunks.length === 0) {
+  topK: number = RETRIEVAL_CONFIG.defaultTopK,
+): Promise<SearchOutcome> {
+  const chunks = await getStore().getChunks(documentId);
+  if (!chunks.length) {
     console.log(`No chunks found for doc ${documentId}`);
-    return [];
+    return { results: [], retrievalMode: 'lexical_only' };
   }
-
-  // small docs just return everything
-  if (chunks.length <= topK) {
-    console.log(`Returning all ${chunks.length} chunks (small document)`);
-    return chunks.map(chunk => ({
-      id: chunk.id,
-      documentId: chunk.documentId,
-      content: chunk.content,
-      page: chunk.page,
-      section: chunk.section,
-      relevance: 0.9,
-      metadata: chunk.metadata,
-    }));
-  }
-
-  // bigger docs do similarity search
-  const queryEmbedding = await generateEmbedding(query);
-  const results: SearchResult[] = [];
-  
-  for (const chunk of chunks) {
-    const similarity = cosineSimilarity(queryEmbedding, chunk.embedding);
-    
-    results.push({
-      id: chunk.id,
-      documentId: chunk.documentId,
-      content: chunk.content,
-      page: chunk.page,
-      section: chunk.section,
-      relevance: similarity,
-      metadata: chunk.metadata,
-    });
-  }
-
-  results.sort((a, b) => b.relevance - a.relevance);
-  
-  const topResults = results.slice(0, topK);
-  
-  if (topResults.length > 0 && topResults[0].relevance < minRelevance) {
-    console.log(`Low similarity scores, returning top ${topK} chunks anyway`);
-  }
-  
-  console.log(`Found ${topResults.length} relevant chunks`);
-  return topResults;
+  return rankChunks(chunks, query, topK);
 }
 
-export async function searchAllDocuments(
+export async function searchDocuments(
+  documentIds: string[],
   query: string,
-  topK: number = 5,
-  minRelevance: number = 0.1
-): Promise<SearchResult[]> {
-  const queryEmbedding = await generateEmbedding(query);
-  const allResults: SearchResult[] = [];
-
-  for (const [docId, chunks] of vectorStore.entries()) {
-    for (const chunk of chunks) {
-      const similarity = cosineSimilarity(queryEmbedding, chunk.embedding);
-      if (similarity < minRelevance) continue;
-      
-      allResults.push({
-        id: chunk.id,
-        documentId: docId,
-        content: chunk.content,
-        page: chunk.page,
-        section: chunk.section,
-        relevance: similarity,
-        metadata: chunk.metadata,
-      });
-    }
-  }
-
-  allResults.sort((a, b) => b.relevance - a.relevance);
-  return allResults.slice(0, topK);
+  topK: number = RETRIEVAL_CONFIG.multiDocTopK,
+  options?: { diversify?: boolean },
+): Promise<SearchOutcome> {
+  const chunks = await getStore().getChunksForDocuments(documentIds);
+  if (!chunks.length) return { results: [], retrievalMode: 'lexical_only' };
+  return rankChunks(chunks, query, topK, {
+    diversifyDocumentIds: options?.diversify ? documentIds : undefined,
+  });
 }
 
-export function getDocumentChunks(documentId: string): StoredChunk[] {
-  return vectorStore.get(documentId) || [];
+export async function getDocumentChunks(documentId: string): Promise<PersistedChunk[]> {
+  return getStore().getChunks(documentId);
 }
 
-export function hasDocument(documentId: string): boolean {
-  return vectorStore.has(documentId);
+export async function hasDocument(documentId: string): Promise<boolean> {
+  const doc = await getStore().getDocument(documentId);
+  if (doc) return true;
+  const chunks = await getStore().getChunks(documentId);
+  return chunks.length > 0;
 }
 
-export function deleteDocumentFromStore(documentId: string): boolean {
-  const deleted = vectorStore.delete(documentId);
-  if (deleted) console.log(`Deleted doc ${documentId}`);
-  return deleted;
+export async function deleteDocumentFromStore(documentId: string): Promise<boolean> {
+  return getStore().deleteDocument(documentId);
 }
 
-export function getAllDocumentIds(): string[] {
-  return Array.from(vectorStore.keys());
-}
-
-export function getStoreStats(): {
+export async function getStoreStats(): Promise<{
   totalDocuments: number;
   totalChunks: number;
   documents: Array<{ documentId: string; chunkCount: number; fileName: string }>;
-} {
-  const docs: Array<{ documentId: string; chunkCount: number; fileName: string }> = [];
+  backend: string;
+}> {
+  const store = getStore();
+  const docs = await store.listDocuments();
   let totalChunks = 0;
+  const documents = [];
 
-  for (const [docId, chunks] of vectorStore.entries()) {
-    totalChunks += chunks.length;
-    docs.push({
-      documentId: docId,
-      chunkCount: chunks.length,
-      fileName: chunks[0]?.metadata.fileName || 'Unknown',
+  for (const doc of docs) {
+    totalChunks += doc.chunkCount;
+    documents.push({
+      documentId: doc.documentId,
+      chunkCount: doc.chunkCount,
+      fileName: doc.fileName,
     });
   }
 
-  return { totalDocuments: vectorStore.size, totalChunks, documents: docs };
+  return {
+    totalDocuments: docs.length,
+    totalChunks,
+    documents,
+    backend: store.backend,
+  };
 }

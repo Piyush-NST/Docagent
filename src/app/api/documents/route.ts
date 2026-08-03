@@ -10,15 +10,38 @@ import {
 } from '@/lib/vector-store';
 import { listDocuments, deleteDocument, downloadDocument } from '@/lib/azure-blob';
 import {
-  deleteDocumentRecord,
   getDocumentRecord,
   listDocumentRecords,
+  toPersistedDocument,
   upsertDocumentRecord,
 } from '@/lib/document-registry';
 import { processDocument } from '@/lib/document-processor';
-import { buildFailedOcrReadiness, buildReadyReadiness, isDocumentReady } from '@/lib/document-status';
+import { buildFailedOcrReadiness, buildReadyReadiness, isDocumentQueryable } from '@/lib/document-status';
+import { isPersistenceError } from '@/lib/store';
 
 const retryLocks = new Set<string>();
+
+function mapReadiness(recordReadiness: NonNullable<Awaited<ReturnType<typeof getDocumentRecord>>>['readiness']) {
+  return {
+    status: recordReadiness.status,
+    fileSize: recordReadiness.fileSize,
+    textLength: recordReadiness.extractedTextLength,
+    pages: recordReadiness.pages,
+    totalChunks: recordReadiness.chunksCreated,
+    embeddingsCreated: recordReadiness.embeddingsCreated,
+    ocrUsed: recordReadiness.ocrUsed,
+    grounded: recordReadiness.grounded,
+    indexStatus: recordReadiness.indexStatus,
+    retrievalStatus: recordReadiness.retrievalStatus,
+    readinessCoverage: recordReadiness.readinessCoverage,
+    pageCoveragePercent: recordReadiness.pageCoveragePercent,
+    estimatedConfidence: recordReadiness.readinessCoverage,
+    pageStats: recordReadiness.pageStats,
+    warnings: recordReadiness.warnings,
+    errorCode: recordReadiness.errorCode,
+    userMessage: recordReadiness.userMessage,
+  };
+}
 
 export async function GET(request: NextRequest) {
   try {
@@ -26,14 +49,14 @@ export async function GET(request: NextRequest) {
     const documentId = searchParams.get('documentId');
 
     if (documentId) {
-      const record = getDocumentRecord(documentId);
-      const inStore = hasDocument(documentId);
+      const record = await getDocumentRecord(documentId);
+      const inStore = await hasDocument(documentId);
 
       if (!record && !inStore) {
         return NextResponse.json({ error: 'Document not found' }, { status: 404 });
       }
 
-      const chunks = getDocumentChunks(documentId);
+      const chunks = await getDocumentChunks(documentId);
       return NextResponse.json({
         documentId,
         chunkCount: chunks.length,
@@ -48,9 +71,9 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    const stats = getStoreStats();
+    const stats = await getStoreStats();
     const blobDocs = await listDocuments();
-    const records = listDocumentRecords();
+    const records = await listDocumentRecords();
     const recordMap = new Map(records.map((r) => [r.documentId, r]));
 
     const documentIds = new Set<string>([
@@ -68,31 +91,16 @@ export async function GET(request: NextRequest) {
         documentId: id,
         fileName: record?.fileName || storeDoc?.fileName || blob?.fileName || 'Unknown',
         fileType: record?.fileType || blob?.fileType,
-        chunkCount: record?.readiness.chunksCreated ?? storeDoc?.chunkCount ?? 0,
+        chunkCount: record?.chunkCount ?? storeDoc?.chunkCount ?? 0,
         status: record?.status || (storeDoc && storeDoc.chunkCount > 0 ? 'ready' : 'ocr_failed'),
-        readiness: record?.readiness
-          ? {
-              status: record.readiness.status,
-              fileSize: record.readiness.fileSize,
-              textLength: record.readiness.extractedTextLength,
-              pages: record.readiness.pages,
-              totalChunks: record.readiness.chunksCreated,
-              embeddingsCreated: record.readiness.embeddingsCreated,
-              ocrUsed: record.readiness.ocrUsed,
-              grounded: record.readiness.grounded,
-              indexStatus: record.readiness.indexStatus,
-              retrievalStatus: record.readiness.retrievalStatus,
-              estimatedConfidence: record.readiness.estimatedConfidence,
-              errorCode: record.readiness.errorCode,
-              userMessage: record.readiness.userMessage,
-            }
-          : undefined,
+        readiness: record?.readiness ? mapReadiness(record.readiness) : undefined,
         blobInfo: blob,
       };
     });
 
     return NextResponse.json({
       success: true,
+      storageBackend: stats.backend,
       stats: {
         totalDocuments: documents.length,
         totalChunks: stats.totalChunks,
@@ -101,7 +109,13 @@ export async function GET(request: NextRequest) {
     });
   } catch (error) {
     console.error('List docs error:', error);
-    return NextResponse.json({ error: 'Failed to list documents' }, { status: 500 });
+    if (isPersistenceError(error)) {
+      return NextResponse.json({ error: error.code, message: error.message }, { status: error.status });
+    }
+    return NextResponse.json(
+      { error: 'Failed to list documents', message: 'Could not load documents from storage.' },
+      { status: 500 },
+    );
   }
 }
 
@@ -115,9 +129,8 @@ export async function DELETE(request: NextRequest) {
     }
 
     console.log(`Deleted doc ${documentId}`);
-    const deletedStore = deleteDocumentFromStore(documentId);
+    const deletedStore = await deleteDocumentFromStore(documentId);
     const deletedBlob = await deleteDocument(documentId);
-    deleteDocumentRecord(documentId);
 
     return NextResponse.json({
       success: true,
@@ -127,6 +140,9 @@ export async function DELETE(request: NextRequest) {
     });
   } catch (error) {
     console.error('Delete doc error:', error);
+    if (isPersistenceError(error)) {
+      return NextResponse.json({ error: error.code, message: error.message }, { status: error.status });
+    }
     return NextResponse.json({ error: 'Failed to delete documents' }, { status: 500 });
   }
 }
@@ -160,8 +176,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: 'Document not found' }, { status: 404 });
       }
 
-      // Clear previous failed index before reprocessing
-      deleteDocumentFromStore(documentId);
+      await deleteDocumentFromStore(documentId);
 
       const processedDoc = await processDocument(
         documentId,
@@ -171,14 +186,15 @@ export async function POST(request: NextRequest) {
       );
 
       let embeddingsCreated = 0;
-      if (isDocumentReady(processedDoc.status) && processedDoc.chunks.length > 0) {
-        embeddingsCreated = await storeDocumentChunks(documentId, processedDoc.chunks);
+      if (isDocumentQueryable(processedDoc.status) && processedDoc.chunks.length > 0) {
+        const indexed = await storeDocumentChunks(documentId, processedDoc.chunks);
+        embeddingsCreated = indexed.embeddingsCreated;
         console.log('[OCR] Retry succeeded');
       } else {
         console.log('[OCR] Retry failed again');
       }
 
-      const readiness = isDocumentReady(processedDoc.status)
+      const readiness = isDocumentQueryable(processedDoc.status)
         ? buildReadyReadiness({
             fileSize: stored.metadata.fileSize,
             textLength: processedDoc.rawText.length,
@@ -186,6 +202,8 @@ export async function POST(request: NextRequest) {
             embeddingsCreated,
             ocrUsed: processedDoc.ocrUsed,
             pages: processedDoc.pages,
+            pageStats: processedDoc.pageStats,
+            warnings: processedDoc.warnings,
           })
         : buildFailedOcrReadiness({
             fileSize: stored.metadata.fileSize,
@@ -193,21 +211,30 @@ export async function POST(request: NextRequest) {
             pages: processedDoc.pages,
             errorCode: processedDoc.errorCode,
             userMessage: processedDoc.userMessage,
+            pageStats: processedDoc.pageStats,
           });
 
-      const existing = getDocumentRecord(documentId);
-      upsertDocumentRecord({
-        documentId,
-        fileName: stored.metadata.fileName,
-        fileType: stored.metadata.fileType,
-        fileSize: stored.metadata.fileSize,
-        uploadedAt: existing?.uploadedAt || stored.metadata.uploadedAt,
-        status: readiness.status,
-        readiness,
-      });
+      if (processedDoc.status === 'limited' && readiness.status !== 'needs_attention') {
+        readiness.status = 'limited';
+        readiness.indexStatus = 'Limited';
+      }
+
+      const existing = await getDocumentRecord(documentId);
+      await upsertDocumentRecord(
+        toPersistedDocument({
+          documentId,
+          fileName: stored.metadata.fileName,
+          fileType: stored.metadata.fileType,
+          fileSize: stored.metadata.fileSize,
+          uploadedAt: existing?.uploadedAt || stored.metadata.uploadedAt,
+          contentHash: existing?.contentHash,
+          status: readiness.status,
+          readiness,
+        }),
+      );
 
       return NextResponse.json({
-        success: readiness.status === 'ready',
+        success: isDocumentQueryable(readiness.status),
         documentId,
         status: readiness.status,
         processing: {
@@ -220,24 +247,30 @@ export async function POST(request: NextRequest) {
           grounded: readiness.grounded,
           indexStatus: readiness.indexStatus,
           retrievalStatus: readiness.retrievalStatus,
-          estimatedConfidence: readiness.estimatedConfidence,
+          readinessCoverage: readiness.readinessCoverage,
+          pageCoveragePercent: readiness.pageCoveragePercent,
+          estimatedConfidence: readiness.readinessCoverage,
+          pageStats: readiness.pageStats,
+          warnings: readiness.warnings,
           errorCode: readiness.errorCode,
           userMessage: readiness.userMessage,
         },
-        message:
-          readiness.status === 'ready'
-            ? 'OCR retry succeeded. Document is ready.'
-            : readiness.userMessage,
+        message: isDocumentQueryable(readiness.status)
+          ? 'OCR retry succeeded. Document is ready.'
+          : readiness.userMessage,
       });
     } finally {
       retryLocks.delete(documentId);
     }
   } catch (error) {
     console.error('Retry OCR error:', error);
+    if (isPersistenceError(error)) {
+      return NextResponse.json({ error: error.code, message: error.message }, { status: error.status });
+    }
     return NextResponse.json(
       {
         error: 'Retry OCR failed',
-        message: error instanceof Error ? error.message : 'Something went wrong',
+        message: 'OCR retry failed. Please try again.',
       },
       { status: 500 },
     );

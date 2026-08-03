@@ -11,6 +11,7 @@ import {
   buildOversizedFileMessage,
   formatBytes,
 } from '@/lib/upload-limits';
+import type { PageProcessingStats } from '@/lib/document-status';
 
 interface UploadedDocument {
   documentId: string;
@@ -19,6 +20,7 @@ interface UploadedDocument {
   fileSize: number;
   uploadedAt: string;
   status?: string;
+  duplicate?: boolean;
   processing: {
     status?: string;
     totalChunks: number;
@@ -29,7 +31,10 @@ interface UploadedDocument {
     grounded?: boolean;
     indexStatus: string;
     retrievalStatus: string;
-    estimatedConfidence: number;
+    readinessCoverage?: number;
+    estimatedConfidence?: number;
+    pageStats?: PageProcessingStats;
+    warnings?: string[];
     errorCode?: string;
     userMessage?: string;
   };
@@ -49,11 +54,11 @@ interface UploadToast {
 }
 
 const uploadAnalysisSteps: AnalysisStep[] = [
-  { label: 'Upload received', detail: 'Securing your file inside the assistant workspace.' },
-  { label: 'Extracting document text', detail: 'Reading pages, paragraphs, tables, and metadata.' },
-  { label: 'Running OCR fallback if needed', detail: 'Checking whether image-aware extraction can recover more text.' },
-  { label: 'Chunking document', detail: 'Splitting the content into clean source-aware sections.' },
-  { label: 'Creating embeddings', detail: 'Indexing the document so grounded answers can find the right context.' },
+  { label: 'Upload received', detail: 'File accepted and queued for extraction.' },
+  { label: 'Extracting text', detail: 'Reading pages, paragraphs, and tables.' },
+  { label: 'OCR fallback', detail: 'Recovering text from scanned or image pages if needed.' },
+  { label: 'Chunking content', detail: 'Building retrieval units with page metadata.' },
+  { label: 'Creating embeddings', detail: 'Indexing content for grounded retrieval.' },
 ];
 
 const UPLOAD_TIMEOUT_MS = 120_000;
@@ -195,7 +200,13 @@ export default function DocumentUpload({ onDocumentUploaded }: DocumentUploadPro
       }
 
       const status = data.status || data.processing?.status;
-      if (status === 'ocr_failed' || status === 'needs_attention') {
+      if (data.duplicate) {
+        showToast({
+          type: 'success',
+          title: 'Already processed',
+          message: `"${file.name}" was already indexed in this workspace session.`,
+        });
+      } else if (status === 'ocr_failed' || status === 'failed' || status === 'needs_attention') {
         showToast({
           type: 'error',
           title: status === 'ocr_failed' ? 'OCR failed' : 'Needs attention',
@@ -203,6 +214,18 @@ export default function DocumentUpload({ onDocumentUploaded }: DocumentUploadPro
             data.processing?.userMessage ||
             data.message ||
             'We could not reliably read text from this upload.',
+        });
+      } else if (status === 'limited') {
+        showToast({
+          type: 'success',
+          title: 'Limited coverage',
+          message: data.processing?.userMessage || data.message || `"${file.name}" is only partially processed.`,
+        });
+      } else if (status === 'ready_with_warnings') {
+        showToast({
+          type: 'success',
+          title: 'Ready with warnings',
+          message: data.message || `"${file.name}" is usable, but some pages may be incomplete.`,
         });
       } else {
         showToast({
@@ -312,19 +335,12 @@ export default function DocumentUpload({ onDocumentUploaded }: DocumentUploadPro
               exit={{ opacity: 0, y: -8 }}
               style={{ width: '100%' }}
             >
-              {previewName ? (
-                <motion.p
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  style={{ marginBottom: 12, color: '#a1a1aa', fontSize: '0.85rem', textAlign: 'left' }}
-                >
-                  Processing <strong style={{ color: '#fafafa' }}>{previewName}</strong>
-                </motion.p>
-              ) : null}
               <DocumentAnalysisLoader
                 steps={uploadAnalysisSteps}
                 title="Preparing your document"
                 mode="upload"
+                fileName={previewName || undefined}
+                status={analysisError ? 'failed' : undefined}
                 error={analysisError}
               />
             </motion.div>

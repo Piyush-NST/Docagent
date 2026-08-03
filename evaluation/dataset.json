@@ -1,0 +1,17 @@
+{
+  "description": "Lightweight grounded evaluation dataset. Run with: npx tsx evaluation/run.ts (requires indexed docs + GEMINI_API_KEY for live mode).",
+  "cases": [
+    {
+      "id": "no-evidence-refusal",
+      "question": "Who is the CEO's spouse?",
+      "expectedKeywords": ["couldn't find sufficient evidence", "uploaded documents"],
+      "notes": "Should refuse when evidence is absent"
+    },
+    {
+      "id": "citation-page-aware",
+      "question": "What does page evidence say about revenue?",
+      "expectedKeywords": ["revenue"],
+      "notes": "Requires a document with revenue mentions"
+    }
+  ]
+}
