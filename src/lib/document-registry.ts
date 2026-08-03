@@ -1,40 +1,65 @@
-import type { DocumentReadinessPayload, DocumentProcessingStatus } from './document-status';
+/**
+ * Document metadata access — backed by persistent DocAgentStore.
+ * Kept as a thin async façade so API routes stay readable.
+ */
 
-export interface DocumentRecord {
+import type { DocumentReadinessPayload, DocumentProcessingStatus } from './document-status';
+import { getStore } from './store';
+import type { PersistedDocument } from './store/types';
+
+export type DocumentRecord = PersistedDocument;
+
+export async function upsertDocumentRecord(record: DocumentRecord): Promise<void> {
+  await getStore().upsertDocument(record);
+}
+
+export async function getDocumentRecord(documentId: string): Promise<DocumentRecord | undefined> {
+  return (await getStore().getDocument(documentId)) || undefined;
+}
+
+export async function findDocumentByHash(contentHash: string): Promise<DocumentRecord | undefined> {
+  return (await getStore().findDocumentByHash(contentHash)) || undefined;
+}
+
+export async function listDocumentRecords(): Promise<DocumentRecord[]> {
+  return getStore().listDocuments();
+}
+
+export async function deleteDocumentRecord(documentId: string): Promise<boolean> {
+  return getStore().deleteDocument(documentId);
+}
+
+export async function hasDocumentRecord(documentId: string): Promise<boolean> {
+  return Boolean(await getStore().getDocument(documentId));
+}
+
+export function toPersistedDocument(args: {
   documentId: string;
   fileName: string;
   fileType: string;
   fileSize: number;
   uploadedAt: string;
+  contentHash?: string;
   status: DocumentProcessingStatus;
   readiness: DocumentReadinessPayload;
-}
-
-const globalForRegistry = globalThis as typeof globalThis & {
-  __docAgentDocumentRegistry?: Map<string, DocumentRecord>;
-};
-
-const registry = globalForRegistry.__docAgentDocumentRegistry ?? new Map<string, DocumentRecord>();
-globalForRegistry.__docAgentDocumentRegistry = registry;
-
-export function upsertDocumentRecord(record: DocumentRecord): void {
-  registry.set(record.documentId, record);
-}
-
-export function getDocumentRecord(documentId: string): DocumentRecord | undefined {
-  return registry.get(documentId);
-}
-
-export function listDocumentRecords(): DocumentRecord[] {
-  return Array.from(registry.values()).sort(
-    (a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime(),
-  );
-}
-
-export function deleteDocumentRecord(documentId: string): boolean {
-  return registry.delete(documentId);
-}
-
-export function hasDocumentRecord(documentId: string): boolean {
-  return registry.has(documentId);
+}): DocumentRecord {
+  const stats = args.readiness.pageStats;
+  return {
+    documentId: args.documentId,
+    fileName: args.fileName,
+    fileType: args.fileType,
+    fileSize: args.fileSize,
+    contentHash: args.contentHash,
+    uploadedAt: args.uploadedAt,
+    status: args.status,
+    readiness: args.readiness,
+    pages: args.readiness.pages,
+    processedPages: stats?.processedPages,
+    nativeTextPages: stats?.nativeTextPages,
+    ocrPages: stats?.ocrPages,
+    ocrFailedPages: stats?.ocrFailedPages,
+    ocrSkippedPages: stats?.ocrSkippedPages,
+    chunkCount: args.readiness.chunksCreated,
+    warnings: args.readiness.warnings,
+  };
 }

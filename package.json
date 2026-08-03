@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "tsx --test tests/**/*.test.ts",
+    "test": "DOCAGENT_STORAGE=memory USE_MOCK_MODE=true tsx --test tests/**/*.test.ts evaluation/retrieval-fixtures.ts",
+    "eval:retrieval": "DOCAGENT_STORAGE=memory USE_MOCK_MODE=true tsx --test evaluation/retrieval-fixtures.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -16,8 +17,8 @@
     "framer-motion": "^12.42.2",
     "mammoth": "^1.11.0",
     "next": "16.1.4",
-    "openai": "^6.16.0",
     "pdf-to-img": "^5.0.0",
+    "postgres": "^3.4.9",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "unpdf": "^1.4.0",

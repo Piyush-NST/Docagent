@@ -12,6 +12,8 @@ describe('chat API readiness policy', () => {
 
   it('allows ready documents', () => {
     assert.equal(isDocumentReady('ready'), true);
+    assert.equal(isDocumentReady('ready_with_warnings'), true);
+    assert.equal(isDocumentReady('limited'), true);
   });
 
   it('maps to DOCUMENT_NOT_READY response shape', () => {

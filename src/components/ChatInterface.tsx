@@ -1,8 +1,6 @@
 'use client';
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import DocumentAnalysisLoader, { AnalysisStep } from './DocumentAnalysisLoader';
-import UploadToastNotice from './UploadToastNotice';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 interface Source {
   chunkId: string;
@@ -10,6 +8,8 @@ interface Source {
   section?: string;
   relevance: number;
   preview?: string;
+  fileName?: string;
+  documentId?: string;
 }
 
 interface Message {
@@ -18,33 +18,37 @@ interface Message {
   content: string;
   sources?: Source[];
   isGrounded?: boolean;
+  failureKind?: string;
   timestamp: Date;
+  systemHint?: boolean;
+}
+
+export interface ChatDocumentContext {
+  documentId: string;
+  fileName: string;
+  status?: string;
+  pages?: number;
+  processedPages?: number;
+  pageCoveragePercent?: number;
 }
 
 interface ChatInterfaceProps {
   documentId: string | null;
+  documentIds?: string[];
   documentName?: string;
   documentReady?: boolean;
   documentStatus?: string;
+  documents?: ChatDocumentContext[];
 }
 
-interface AnswerSection {
-  title: string;
-  items: string[];
-  paragraphs: string[];
-}
+type ChatMode = 'ask' | 'summarize' | 'compare' | 'extract';
 
-const answerAnalysisSteps: AnalysisStep[] = [
-  { label: 'Searching relevant context', detail: 'Matching your question against the indexed document sections.' },
-  { label: 'Preparing grounded answer', detail: 'Composing an answer with source-aware evidence.' },
-  { label: 'Checking sources', detail: 'Verifying that the response stays tied to retrieved context.' },
+const MODE_OPTIONS: Array<{ value: ChatMode; label: string; description: string }> = [
+  { value: 'ask', label: 'Ask', description: 'Answer questions using document evidence' },
+  { value: 'summarize', label: 'Summarize', description: 'Create a grounded document summary' },
+  { value: 'compare', label: 'Compare', description: 'Compare selected documents' },
+  { value: 'extract', label: 'Extract', description: 'Return requested structured information' },
 ];
-
-const MIN_ANSWER_DELAY_MS = 4_200;
-
-function wait(ms: number) {
-  return new Promise((resolve) => window.setTimeout(resolve, ms));
-}
 
 function cleanAnswerText(content: string) {
   return content
@@ -57,286 +61,415 @@ function cleanAnswerText(content: string) {
     .trim();
 }
 
-function cleanAnswerLine(text: string) {
-  return text
-    .replace(/\s+/g, ' ')
-    .replace(/\s+([,.;:!?])/g, '$1')
-    .trim();
-}
-
-function splitDenseText(text: string) {
-  const cleaned = cleanAnswerLine(text);
-  if (cleaned.length <= 190) return [cleaned];
-
-  const sentences = cleaned.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [cleaned];
-  const chunks: string[] = [];
-
-  for (const sentence of sentences) {
-    const trimmed = cleanAnswerLine(sentence);
-    if (!trimmed) continue;
-
-    if (trimmed.length <= 220) {
-      chunks.push(trimmed);
-      continue;
-    }
-
-    const parts = trimmed.split(/\s{2,}|;\s+|,\s+(?=[A-Z][a-z])/).map(cleanAnswerLine).filter(Boolean);
-    chunks.push(...(parts.length > 1 ? parts : [trimmed.slice(0, 220).trim()]));
-  }
-
-  return chunks.length > 0 ? chunks : [cleaned.slice(0, 220).trim()];
-}
-
-function formatInlineText(text: string) {
-  const parts = text.split(/(\*\*[^*]+\*\*)/g);
-
+function formatInline(text: string, keyPrefix: string) {
+  const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
   return parts.map((part, index) => {
     if (part.startsWith('**') && part.endsWith('**')) {
-      return <strong key={`${part}-${index}`}>{part.slice(2, -2)}</strong>;
+      return <strong key={`${keyPrefix}-b-${index}`}>{part.slice(2, -2)}</strong>;
     }
-
-    return <React.Fragment key={`${part}-${index}`}>{part}</React.Fragment>;
+    if (part.startsWith('`') && part.endsWith('`')) {
+      return (
+        <code key={`${keyPrefix}-c-${index}`} className="da-inline-code">
+          {part.slice(1, -1)}
+        </code>
+      );
+    }
+    return <React.Fragment key={`${keyPrefix}-t-${index}`}>{part}</React.Fragment>;
   });
 }
 
-function getSectionIcon(title: string) {
-  const lowerTitle = title.toLowerCase();
-  if (lowerTitle.includes('education')) return 'ED';
-  if (lowerTitle.includes('experience') || lowerTitle.includes('project')) return 'XP';
-  if (lowerTitle.includes('skill')) return 'SK';
-  if (lowerTitle.includes('date') || lowerTitle.includes('number')) return 'NO';
-  if (lowerTitle.includes('highlight') || lowerTitle.includes('finding')) return 'HI';
-  return 'AI';
+function parseMarkdownTable(block: string): { headers: string[]; rows: string[][] } | null {
+  const lines = block
+    .trim()
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean);
+  if (lines.length < 2 || !lines[0].includes('|')) return null;
+  const splitRow = (line: string) =>
+    line
+      .replace(/^\|/, '')
+      .replace(/\|$/, '')
+      .split('|')
+      .map((c) => c.trim());
+  const headers = splitRow(lines[0]);
+  const sep = lines[1];
+  if (!/^\|?[\s:-]+\|/.test(sep) && !/^[\s|:-]+$/.test(sep.replace(/\|/g, ''))) return null;
+  const rows = lines.slice(2).map(splitRow).filter((r) => r.some(Boolean));
+  if (!headers.length) return null;
+  return { headers, rows };
 }
 
-function parseAnswerSections(content: string): AnswerSection[] {
-  const cleaned = cleanAnswerText(content);
-  const lines = cleaned.split('\n');
-  const sections: AnswerSection[] = [];
-  let currentSection: AnswerSection | null = null;
+function AnswerContent({ content, sources, onCite }: { content: string; sources?: Source[]; onCite?: (s: Source) => void }) {
+  const cleaned = useMemo(() => cleanAnswerText(content), [content]);
 
-  const ensureSection = () => {
-    if (!currentSection) {
-      currentSection = { title: 'Overview', items: [], paragraphs: [] };
-      sections.push(currentSection);
+  const blocks = useMemo(() => {
+    const lines = cleaned.split('\n');
+    const out: Array<
+      | { type: 'heading'; level: number; text: string }
+      | { type: 'paragraph'; text: string }
+      | { type: 'list'; ordered: boolean; items: string[] }
+      | { type: 'table'; headers: string[]; rows: string[][] }
+      | { type: 'kv'; pairs: Array<{ key: string; value: string }> }
+    > = [];
+
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+      const trimmed = line.trim();
+      if (!trimmed) {
+        i += 1;
+        continue;
+      }
+
+      if (trimmed.startsWith('|') && i + 1 < lines.length && lines[i + 1].includes('|')) {
+        const tableLines: string[] = [];
+        while (i < lines.length && lines[i].includes('|')) {
+          tableLines.push(lines[i]);
+          i += 1;
+        }
+        const table = parseMarkdownTable(tableLines.join('\n'));
+        if (table) {
+          out.push({ type: 'table', ...table });
+          continue;
+        }
+      }
+
+      const heading = trimmed.match(/^(#{1,3})\s+(.+)$/);
+      if (heading) {
+        out.push({ type: 'heading', level: heading[1].length, text: heading[2].trim() });
+        i += 1;
+        continue;
+      }
+
+      const bullet = trimmed.match(/^[-*]\s+(.+)$/);
+      const numbered = trimmed.match(/^\d+[.)]\s+(.+)$/);
+      if (bullet || numbered) {
+        const ordered = Boolean(numbered);
+        const items: string[] = [];
+        while (i < lines.length) {
+          const t = lines[i].trim();
+          const b = t.match(/^[-*]\s+(.+)$/);
+          const n = t.match(/^\d+[.)]\s+(.+)$/);
+          if (ordered ? n : b) {
+            items.push((ordered ? n![1] : b![1]).trim());
+            i += 1;
+          } else if (!t) {
+            i += 1;
+            break;
+          } else break;
+        }
+        out.push({ type: 'list', ordered, items });
+        continue;
+      }
+
+      // Extract-style key: value lines
+      const kvMatch = trimmed.match(/^([A-Za-z][A-Za-z0-9 /_-]{1,40})\s*[:=]\s+(.+)$/);
+      if (kvMatch) {
+        const pairs: Array<{ key: string; value: string }> = [];
+        while (i < lines.length) {
+          const t = lines[i].trim();
+          const m = t.match(/^([A-Za-z][A-Za-z0-9 /_-]{1,40})\s*[:=]\s+(.+)$/);
+          if (m) {
+            pairs.push({ key: m[1].trim(), value: m[2].trim() });
+            i += 1;
+          } else if (!t) {
+            i += 1;
+            break;
+          } else break;
+        }
+        if (pairs.length >= 2) {
+          out.push({ type: 'kv', pairs });
+          continue;
+        }
+        // fall through as paragraph if only one
+        out.push({ type: 'paragraph', text: `${pairs[0].key}: ${pairs[0].value}` });
+        continue;
+      }
+
+      out.push({ type: 'paragraph', text: trimmed });
+      i += 1;
     }
 
-    return currentSection;
-  };
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-
-    const heading = trimmed.match(/^#{1,3}\s+(.+)$/);
-    if (heading) {
-      currentSection = { title: heading[1].trim(), items: [], paragraphs: [] };
-      sections.push(currentSection);
-      continue;
-    }
-
-    const bullet = trimmed.match(/^[-*]\s+(.+)$/);
-    if (bullet) {
-      ensureSection().items.push(...splitDenseText(bullet[1].trim()));
-      continue;
-    }
-
-    const target = ensureSection();
-    const denseLines = splitDenseText(trimmed);
-    if (trimmed.length > 180 || denseLines.length > 1) {
-      target.items.push(...denseLines);
-    } else {
-      target.paragraphs.push(cleanAnswerLine(trimmed));
-    }
-  }
-
-  return sections.filter(section => section.title.toLowerCase() !== 'sources');
-}
-
-function AnswerRenderer({ content }: { content: string }) {
-  const sections = useMemo(() => parseAnswerSections(content), [content]);
-  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({});
+    return out;
+  }, [cleaned]);
 
   return (
-    <div className="answer-renderer">
-      {sections.map((section, sectionIndex) => {
-        const sectionKey = `${section.title}-${sectionIndex}`;
-        const isExpanded = Boolean(expandedSections[sectionKey]);
-        const initialCount = section.items.some(item => item.length > 170) ? 3 : 5;
-        const visibleItems = isExpanded ? section.items : section.items.slice(0, initialCount);
-        const hiddenCount = Math.max(0, section.items.length - visibleItems.length);
-        const isLongSection = section.items.length > 4 || section.items.some(item => item.length > 170);
-
-        return (
-          <section className={`answer-section ${isLongSection ? 'answer-section-long' : ''}`} key={sectionKey}>
-            <div className="answer-section-heading">
-              <span>{getSectionIcon(section.title)}</span>
-              <h3>{section.title}</h3>
-            </div>
-
-            {section.paragraphs.map((paragraph, index) => (
-              <p className="answer-paragraph" key={`${section.title}-p-${index}`}>
-                {formatInlineText(paragraph)}
-              </p>
-            ))}
-
-            {section.items.length > 0 && (
-              <>
-                <div className="answer-card-grid">
-                  {visibleItems.map((item, index) => (
-                    <div className="answer-bullet-card" key={`${section.title}-item-${index}`}>
-                      <span className="answer-bullet-dot" />
-                      <p>{formatInlineText(item)}</p>
-                    </div>
+    <div className="da-answer">
+      {blocks.map((block, idx) => {
+        if (block.type === 'heading') {
+          const Tag = (block.level === 1 ? 'h2' : block.level === 2 ? 'h3' : 'h4') as 'h2' | 'h3' | 'h4';
+          return (
+            <Tag key={`h-${idx}`} className="da-answer-heading">
+              {formatInline(block.text, `h-${idx}`)}
+            </Tag>
+          );
+        }
+        if (block.type === 'list') {
+          const ListTag = block.ordered ? 'ol' : 'ul';
+          return (
+            <ListTag key={`l-${idx}`} className="da-answer-list">
+              {block.items.map((item, itemIdx) => (
+                <li key={`li-${idx}-${itemIdx}`}>{formatInline(item, `li-${idx}-${itemIdx}`)}</li>
+              ))}
+            </ListTag>
+          );
+        }
+        if (block.type === 'table') {
+          return (
+            <div key={`t-${idx}`} className="da-table-wrap">
+              <table className="da-table">
+                <thead>
+                  <tr>
+                    {block.headers.map((h) => (
+                      <th key={h}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {block.rows.map((row, rIdx) => (
+                    <tr key={`r-${rIdx}`}>
+                      {block.headers.map((_, cIdx) => (
+                        <td key={`c-${rIdx}-${cIdx}`}>{formatInline(row[cIdx] || '—', `td-${rIdx}-${cIdx}`)}</td>
+                      ))}
+                    </tr>
                   ))}
+                </tbody>
+              </table>
+            </div>
+          );
+        }
+        if (block.type === 'kv') {
+          return (
+            <dl key={`kv-${idx}`} className="da-kv-grid">
+              {block.pairs.map((pair) => (
+                <div key={pair.key} className="da-kv-row">
+                  <dt>{pair.key}</dt>
+                  <dd>{formatInline(pair.value, `kv-${pair.key}`)}</dd>
                 </div>
-
-                {hiddenCount > 0 || isExpanded ? (
-                  <button
-                    type="button"
-                    className="answer-toggle"
-                    onClick={() => {
-                      setExpandedSections((current) => ({
-                        ...current,
-                        [sectionKey]: !isExpanded,
-                      }));
-                    }}
-                  >
-                    {isExpanded ? 'Show less' : `Show ${hiddenCount} more`}
-                  </button>
-                ) : null}
-              </>
-            )}
-          </section>
+              ))}
+            </dl>
+          );
+        }
+        return (
+          <p key={`p-${idx}`} className="da-answer-p">
+            {formatInline(block.text, `p-${idx}`)}
+            {sources && sources[0] && idx === 0 ? (
+              <button
+                type="button"
+                className="da-cite-inline"
+                onClick={() => onCite?.(sources[0])}
+                aria-label="Open first source evidence"
+              >
+                [1]
+              </button>
+            ) : null}
+          </p>
         );
       })}
     </div>
   );
 }
 
+function sourceLabel(source: Source, index: number) {
+  const name = source.fileName || `Source ${index + 1}`;
+  const short = name.length > 36 ? `${name.slice(0, 33)}…` : name;
+  return source.page ? `${short} · p.${source.page}` : short;
+}
+
 export default function ChatInterface({
   documentId,
+  documentIds = [],
   documentName,
   documentReady = true,
   documentStatus,
+  documents = [],
 }: ChatInterfaceProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const [toast, setToast] = useState<{ title: string; message: string } | null>(null);
-  const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [mode, setMode] = useState<ChatMode>('ask');
+  const [modeOpen, setModeOpen] = useState(false);
+  const [activeSource, setActiveSource] = useState<Source | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [showJump, setShowJump] = useState(false);
+  const [genStep, setGenStep] = useState(0);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const stickToBottomRef = useRef(true);
+  const modeMenuRef = useRef<HTMLDivElement>(null);
 
-  const promptChips = useMemo(
-    () => ['Summarize this document', 'What are the key findings?', 'List dates and numbers'],
-    [],
+  const ids = useMemo(
+    () => (documentIds.length > 0 ? documentIds : documentId ? [documentId] : []),
+    [documentId, documentIds],
   );
-  const chatEnabled = Boolean(documentId && documentReady);
+  const selectionKey = ids.join('|');
 
-  const showToast = (message: string) => {
-    setToast({ title: 'Something went wrong', message });
-    setTimeout(() => setToast(null), 5200);
+  const selectedDocs = useMemo(() => {
+    if (documents.length) {
+      const map = new Map(documents.map((d) => [d.documentId, d]));
+      return ids.map((id) => map.get(id)).filter(Boolean) as ChatDocumentContext[];
+    }
+    if (documentId && documentName) {
+      return [{ documentId, fileName: documentName, status: documentStatus }];
+    }
+    return [];
+  }, [documents, documentId, documentName, documentStatus, ids]);
+
+  const chatEnabled = ids.length > 0 && documentReady && (mode !== 'compare' || ids.length >= 2);
+  const isLimited = documentStatus === 'limited' || selectedDocs.some((d) => d.status === 'limited');
+  const isWarning = documentStatus === 'ready_with_warnings' || selectedDocs.some((d) => d.status === 'ready_with_warnings');
+  const conversationStarted = messages.some((m) => m.role === 'user');
+
+  const suggestions = useMemo(() => {
+    if (mode === 'summarize') return ['Summarize this document', 'What are the key findings?', 'List important dates'];
+    if (mode === 'compare') return ['Compare the uploaded reports', 'What changed between these documents?', 'Compare revenue and profit'];
+    if (mode === 'extract') return ['Extract dates and amounts', 'Extract names and organizations', 'Extract key obligations'];
+    return ['Summarize this document', 'What are the key findings?', 'Find the key risks', 'List important dates'];
+  }, [mode]);
+
+  const resizeTextarea = useCallback(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+  }, []);
+
+  useEffect(() => {
+    resizeTextarea();
+  }, [input, resizeTextarea]);
+
+  useEffect(() => {
+    const onDocClick = (event: MouseEvent) => {
+      if (!modeMenuRef.current?.contains(event.target as Node)) setModeOpen(false);
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, []);
+
+  useEffect(() => {
+    if (!loading) {
+      setGenStep(0);
+      return;
+    }
+    const timers = [
+      window.setTimeout(() => setGenStep(1), 700),
+      window.setTimeout(() => setGenStep(2), 1600),
+    ];
+    return () => timers.forEach((t) => window.clearTimeout(t));
+  }, [loading]);
+
+  const scrollToLatest = useCallback((smooth = true) => {
+    messagesEndRef.current?.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto', block: 'end' });
+  }, []);
+
+  useEffect(() => {
+    if (stickToBottomRef.current) scrollToLatest(true);
+  }, [messages, loading, scrollToLatest]);
+
+  const onScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    stickToBottomRef.current = nearBottom;
+    setShowJump(!nearBottom && conversationStarted);
   };
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, loading]);
+    // Reset thread when selection changes; empty thread shows empty state (no fake welcome bubble)
+    setMessages([]);
+    setActiveSource(null);
+    setInput('');
+  }, [documentId, selectionKey, documentReady]);
 
-  useEffect(() => {
-    if (documentId && documentName) {
-      if (!documentReady) {
-        setMessages([
-          {
-            id: 'not-ready',
-            role: 'assistant',
-            content:
-              'This document is not ready for questions yet. We could not reliably extract readable text. Try Retry OCR or upload a clearer file.',
-            timestamp: new Date(),
-          },
-        ]);
-        return;
-      }
-
-      setMessages([
-        {
-          id: 'welcome',
-          role: 'assistant',
-          content: `Ready to answer questions about "${documentName}". What would you like to know?`,
-          timestamp: new Date(),
-        },
-      ]);
-    } else {
-      setMessages([]);
+  const copyAnswer = async (message: Message) => {
+    try {
+      await navigator.clipboard.writeText(cleanAnswerText(message.content));
+      setCopiedId(message.id);
+      window.setTimeout(() => setCopiedId(null), 1600);
+    } catch {
+      // ignore
     }
-  }, [documentId, documentName, documentReady]);
+  };
 
   const sendMessage = async (question = input) => {
-    if (!question.trim() || !documentId || loading || !documentReady) return;
+    if (!question.trim() || ids.length === 0 || loading || !chatEnabled) return;
 
     const userMsg: Message = {
-      id: Date.now().toString(),
+      id: `u-${Date.now()}`,
       role: 'user',
       content: question.trim(),
       timestamp: new Date(),
     };
 
-    setMessages((prev) => [...prev, userMsg]);
+    setMessages((prev) => [...prev.filter((m) => !m.systemHint), userMsg]);
     setInput('');
     setLoading(true);
-    setAnalysisError(null);
-    const analysisStartedAt = Date.now();
+    setActiveSource(null);
+    stickToBottomRef.current = true;
+    window.requestAnimationFrame(() => {
+      if (textareaRef.current) {
+        textareaRef.current.style.height = 'auto';
+      }
+    });
 
     try {
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          documentId,
+          documentId: ids[0],
+          documentIds: ids,
           question: userMsg.content,
+          mode,
         }),
       });
 
       const data = await res.json();
 
       if (!res.ok) {
-        if (data.error === 'DOCUMENT_NOT_READY') {
-          throw new Error(data.message || 'This document is not ready for questions.');
-        }
-        throw new Error(data.message || data.error || 'Request failed');
+        const message =
+          data.error === 'DOCUMENT_NOT_READY'
+            ? data.message || 'Selected documents are not ready for questions yet.'
+            : data.message || 'DocAgent couldn’t generate a response right now. Your documents are still available.';
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `e-${Date.now()}`,
+            role: 'assistant',
+            content: message,
+            isGrounded: false,
+            failureKind: data.failureKind || 'generation_error',
+            timestamp: new Date(),
+          },
+        ]);
+        return;
       }
-
-      const elapsed = Date.now() - analysisStartedAt;
-      if (elapsed < MIN_ANSWER_DELAY_MS) {
-        await wait(MIN_ANSWER_DELAY_MS - elapsed);
-      }
-
-      const botMsg: Message = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: data.answer || 'I could not generate a response. Please try again.',
-        sources: data.sources,
-        isGrounded: data.isGrounded,
-        timestamp: new Date(),
-      };
-
-      setMessages((prev) => [...prev, botMsg]);
-    } catch (err) {
-      console.error('Chat error:', err);
-      setAnalysisError('The assistant could not finish this answer. Please try again.');
-      const elapsed = Date.now() - analysisStartedAt;
-      if (elapsed < MIN_ANSWER_DELAY_MS) {
-        await wait(MIN_ANSWER_DELAY_MS - elapsed);
-      } else {
-        await wait(900);
-      }
-      showToast('Unable to get response. Please try again.');
 
       setMessages((prev) => [
         ...prev,
         {
-          id: (Date.now() + 1).toString(),
+          id: `a-${Date.now()}`,
           role: 'assistant',
-          content: 'I encountered an issue processing your question. Please try again.',
+          content:
+            data.answer ||
+            "I couldn't find enough evidence in the selected documents to answer this confidently.",
+          sources: data.sources,
+          isGrounded: data.isGrounded,
+          failureKind: data.failureKind,
+          timestamp: new Date(),
+        },
+      ]);
+    } catch {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `e-${Date.now()}`,
+          role: 'assistant',
+          content: 'DocAgent couldn’t generate a response right now. Your documents are still available.',
+          isGrounded: false,
+          failureKind: 'generation_error',
           timestamp: new Date(),
         },
       ]);
@@ -345,162 +478,340 @@ export default function ChatInterface({
     }
   };
 
-  const handleKeyPress = (event: React.KeyboardEvent) => {
+  const onKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
       sendMessage();
     }
   };
 
+  const statusLabel = !documentId
+    ? 'No document'
+    : !documentReady
+      ? documentStatus === 'ocr_failed'
+        ? 'OCR failed'
+        : 'Not ready'
+      : isLimited
+        ? 'Limited coverage'
+        : isWarning
+          ? 'Ready with warnings'
+          : 'Ready';
+
+  const coverageNote = useMemo(() => {
+    const limited = selectedDocs.find((d) => d.status === 'limited') || (isLimited ? selectedDocs[0] : null);
+    if (!limited) return null;
+    if (limited.processedPages != null && limited.pages != null) {
+      return `${limited.processedPages} of ${limited.pages} pages processed. Answers may only reflect processed content.`;
+    }
+    if (limited.pageCoveragePercent != null) {
+      return `${limited.pageCoveragePercent}% processing coverage. Answers may only reflect processed content.`;
+    }
+    return 'Partial document coverage. Answers may only reflect processed content.';
+  }, [isLimited, selectedDocs]);
+
+  const genLabels = ['Searching your documents…', 'Reading relevant passages…', 'Writing a grounded answer…'];
+
   if (!documentId) {
     return (
-      <section className="glass-card chat-container">
-        <div className="chat-header">
-          <div>
-            <span className="eyebrow">Answer Panel</span>
-            <h2>Chat with Document</h2>
+      <section className="da-chat glass-card">
+        <header className="da-chat-top">
+          <div className="da-chat-top-copy">
+            <p className="da-chat-kicker">Conversation</p>
+            <h2>Ask your documents</h2>
+            <p className="da-chat-sub">Grounded answers with page-level sources</p>
           </div>
-          <span className="status-badge status-warning">Waiting for upload</span>
+          <span className="da-chat-status">Waiting for document</span>
+        </header>
+
+        <div className="da-chat-body">
+          <div className="da-chat-scroll">
+            <div className="da-chat-thread">
+              <div className="da-chat-hero">
+                <h3>Upload or select a document</h3>
+                <p>
+                  Once a file is ready, you can ask questions here and DocAgent will answer from the retrieved evidence —
+                  with citations you can open.
+                </p>
+              </div>
+            </div>
+          </div>
         </div>
 
-        <div className="empty-state chat-empty">
-          <div className="empty-illustration assistant-illustration">
-            <svg viewBox="0 0 140 140" fill="none">
-              <rect x="26" y="32" width="88" height="64" rx="22" fill="currentColor" opacity="0.12" />
-              <path d="M49 67h42M49 80h26" stroke="currentColor" strokeWidth="5" strokeLinecap="round" opacity="0.55" />
-              <circle cx="48" cy="55" r="6" fill="currentColor" opacity="0.55" />
-              <circle cx="92" cy="55" r="6" fill="currentColor" opacity="0.55" />
-              <path d="M57 99 43 118v-21" fill="currentColor" opacity="0.12" />
-            </svg>
+        <footer className="da-composer-wrap">
+          <div className="da-composer da-composer-disabled">
+            <textarea
+              rows={1}
+              disabled
+              placeholder="Select a document to start asking…"
+              aria-label="Message"
+            />
+            <div className="da-composer-bar">
+              <button type="button" className="da-mode-trigger" disabled>
+                Ask <span aria-hidden="true">▾</span>
+              </button>
+              <button type="button" className="da-send" disabled aria-label="Send message">
+                Send
+              </button>
+            </div>
           </div>
-          <h3>No document selected</h3>
-          <p>Upload or choose a document to start an evidence-backed conversation.</p>
-        </div>
+          <p className="da-composer-hint">Upload a PDF, DOCX, or image on the left to begin</p>
+        </footer>
       </section>
     );
   }
 
   return (
-    <section className="glass-card chat-container">
-      {toast && (
-        <UploadToastNotice
-          type="error"
-          title={toast.title}
-          message={toast.message}
-          onDismiss={() => setToast(null)}
-        />
-      )}
-
-      <div className="chat-header">
-        <div>
-          <span className="eyebrow">Answer Panel</span>
-          <h2>Chat with Document</h2>
-          <p>{documentName}</p>
+    <section className={`da-chat glass-card ${activeSource ? 'da-chat-with-evidence' : ''}`}>
+      <header className="da-chat-top">
+        <div className="da-chat-top-copy">
+          <p className="da-chat-kicker">Conversation</p>
+          <h2>{documentName || 'Document chat'}</h2>
+          <p className="da-chat-sub">
+            {ids.length > 1 ? `${ids.length} documents in scope` : 'Grounded answers with page-level sources'}
+          </p>
         </div>
-        <span className={`status-badge ${chatEnabled ? 'status-success' : 'status-warning'}`}>
-          <span className="status-dot" />
-          {chatEnabled ? 'Grounded' : documentStatus === 'ocr_failed' ? 'OCR Failed' : 'Needs Attention'}
+        <span className={`da-chat-status da-chat-status-${documentReady ? (isLimited || isWarning ? 'warn' : 'ok') : 'bad'}`}>
+          {statusLabel}
         </span>
-      </div>
+      </header>
 
-      <div className="chat-messages">
-        {messages.map((msg) => (
-          <article key={msg.id} className={`message-row message-${msg.role}`}>
-            <div className="message-avatar">
-              {msg.role === 'assistant' ? (
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                  <path d="M12 3 4 7v6c0 5 3.4 7.7 8 8 4.6-.3 8-3 8-8V7z" />
-                  <path d="M9 12h6" />
-                  <path d="M12 9v6" />
-                </svg>
-              ) : (
-                <span>You</span>
-              )}
-            </div>
-            <div className={`message-bubble ${msg.role === 'assistant' ? 'answer-message-bubble' : ''}`}>
-              <div className="message-content">
-                {msg.role === 'assistant' ? <AnswerRenderer content={msg.content} /> : msg.content}
-              </div>
+      {(isLimited || isWarning) && documentReady ? (
+        <div className={`da-chat-banner ${isLimited ? 'is-limited' : 'is-warn'}`} role="status">
+          <strong>{isLimited ? 'Partial document coverage' : 'Ready with warnings'}</strong>
+          <span>{coverageNote}</span>
+        </div>
+      ) : null}
 
-              {msg.sources && msg.sources.length > 0 && (
-                <div className="sources">
-                  <p>Sources</p>
-                  <div>
-                    {msg.sources.map((source, idx) => (
-                      <span key={source.chunkId} className="source-tag">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                          <path d="M14 2v6h6" />
-                        </svg>
-                        {source.page ? `Page ${source.page}` : `Source ${idx + 1}`}
-                        {source.section && source.section !== `Chunk ${idx + 1}` && (
-                          <span>{source.section.substring(0, 22)}</span>
-                        )}
-                      </span>
+      {!documentReady ? (
+        <div className="da-chat-banner is-bad" role="status">
+          <strong>Document not ready</strong>
+          <span>Usable text could not be extracted yet. Upload a clearer file or a searchable PDF/DOCX.</span>
+        </div>
+      ) : null}
+
+      <div className="da-chat-body">
+        <div className="da-chat-scroll" ref={scrollRef} onScroll={onScroll}>
+          <div className="da-chat-thread">
+            {!conversationStarted && !loading ? (
+              <div className="da-chat-hero">
+                <h3>Ask your documents</h3>
+                <p>
+                  Get answers grounded in the files you’ve selected, with citations that point back to the retrieved
+                  evidence.
+                </p>
+                {chatEnabled ? (
+                  <div className="da-suggest-row">
+                    {suggestions.map((chip) => (
+                      <button type="button" key={chip} className="da-suggest" onClick={() => sendMessage(chip)}>
+                        {chip}
+                      </button>
                     ))}
                   </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {messages.map((msg) => {
+              if (msg.role === 'user') {
+                return (
+                  <article key={msg.id} className="da-msg da-msg-user">
+                    <div className="da-user-bubble">{msg.content}</div>
+                  </article>
+                );
+              }
+
+              const noEvidence = msg.failureKind === 'no_evidence' || msg.isGrounded === false;
+              return (
+                <article key={msg.id} className="da-msg da-msg-assistant">
+                  <div className="da-assistant-meta">
+                    <span className="da-assistant-mark" aria-hidden="true">
+                      D
+                    </span>
+                    <span>DocAgent</span>
+                    {msg.isGrounded ? <span className="da-pill da-pill-ok">Grounded</span> : null}
+                    {noEvidence && !msg.failureKind?.includes('error') ? (
+                      <span className="da-pill da-pill-muted">No evidence</span>
+                    ) : null}
+                  </div>
+
+                  <AnswerContent content={msg.content} sources={msg.sources} onCite={setActiveSource} />
+
+                  {msg.sources && msg.sources.length > 0 ? (
+                    <div className="da-sources">
+                      <span className="da-sources-label">Sources</span>
+                      <div className="da-source-list">
+                        {msg.sources.map((source, idx) => (
+                          <button
+                            type="button"
+                            key={source.chunkId || `${msg.id}-${idx}`}
+                            className={`da-source-chip ${activeSource?.chunkId === source.chunkId ? 'is-active' : ''}`}
+                            onClick={() => setActiveSource(source)}
+                          >
+                            <span className="da-source-index">[{idx + 1}]</span>
+                            <span>{sourceLabel(source, idx)}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <div className="da-msg-actions">
+                    <button type="button" onClick={() => copyAnswer(msg)} aria-label="Copy answer">
+                      {copiedId === msg.id ? 'Copied' : 'Copy'}
+                    </button>
+                    {msg.sources && msg.sources.length > 0 ? (
+                      <button type="button" onClick={() => setActiveSource(msg.sources![0])} aria-label="Show sources">
+                        Show evidence
+                      </button>
+                    ) : null}
+                    {msg.failureKind === 'generation_error' || msg.failureKind === 'no_evidence' ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const lastUser = [...messages].reverse().find((m) => m.role === 'user');
+                          if (lastUser) sendMessage(lastUser.content);
+                        }}
+                      >
+                        Retry
+                      </button>
+                    ) : null}
+                  </div>
+                </article>
+              );
+            })}
+
+            {loading ? (
+              <article className="da-msg da-msg-assistant" aria-live="polite" aria-busy="true">
+                <div className="da-assistant-meta">
+                  <span className="da-assistant-mark" aria-hidden="true">
+                    D
+                  </span>
+                  <span>DocAgent</span>
                 </div>
-              )}
-            </div>
-          </article>
-        ))}
+                <div className="da-generating">
+                  <span className="da-gen-dots" aria-hidden="true">
+                    <i />
+                    <i />
+                    <i />
+                  </span>
+                  <span>{genLabels[genStep] || genLabels[0]}</span>
+                </div>
+              </article>
+            ) : null}
 
-        {loading && (
-          <article className="message-row message-assistant">
-            <div className="message-avatar">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                <path d="M12 3 4 7v6c0 5 3.4 7.7 8 8 4.6-.3 8-3 8-8V7z" />
-              </svg>
-            </div>
-            <div className="message-bubble thinking-bubble premium-thinking-bubble">
-              <DocumentAnalysisLoader
-                steps={answerAnalysisSteps}
-                title="Building a grounded answer"
-                mode="chat"
-                error={analysisError}
-              />
-            </div>
-          </article>
-        )}
+            <div ref={messagesEndRef} />
+          </div>
+        </div>
 
-        <div ref={messagesEndRef} />
+        {activeSource ? (
+          <aside className="da-evidence" aria-label="Evidence panel">
+            <div className="da-evidence-head">
+              <div>
+                <p className="da-chat-kicker">Evidence</p>
+                <strong>{activeSource.fileName || 'Document'}</strong>
+                <p>
+                  {activeSource.page ? `Page ${activeSource.page}` : 'Page unavailable'}
+                  {activeSource.section ? ` · ${activeSource.section}` : ''}
+                </p>
+              </div>
+              <button type="button" className="da-icon-btn" onClick={() => setActiveSource(null)} aria-label="Close evidence">
+                ✕
+              </button>
+            </div>
+            <div className="da-evidence-body">
+              <p className="da-evidence-snippet">{activeSource.preview || 'No snippet available for this citation.'}</p>
+            </div>
+          </aside>
+        ) : null}
       </div>
 
-      <div className="prompt-chip-row">
-        {promptChips.map((chip) => (
-          <button type="button" key={chip} onClick={() => sendMessage(chip)} disabled={loading || !chatEnabled}>
-            {chip}
-          </button>
-        ))}
-      </div>
-
-      <div className="chat-input-container">
-        <input
-          type="text"
-          placeholder={
-            chatEnabled
-              ? 'Ask anything grounded in this document...'
-              : 'Document not ready — fix OCR before asking questions'
-          }
-          value={input}
-          onChange={(event) => setInput(event.target.value)}
-          onKeyDown={handleKeyPress}
-          disabled={loading || !chatEnabled}
-        />
-        <button
-          className="btn btn-primary icon-btn"
-          onClick={() => sendMessage()}
-          disabled={loading || !chatEnabled || !input.trim()}
-        >          {loading ? (
-            <div className="loading-spinner small-spinner" />
-          ) : (
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="m22 2-7 20-4-9-9-4z" />
-              <path d="M22 2 11 13" />
-            </svg>
-          )}
+      {showJump ? (
+        <button type="button" className="da-jump" onClick={() => scrollToLatest(true)}>
+          Jump to latest
         </button>
-      </div>
+      ) : null}
+
+      <footer className="da-composer-wrap">
+        <div className="da-composer">
+          {selectedDocs.length > 0 ? (
+            <div className="da-composer-docs" aria-label="Documents in scope">
+              {selectedDocs.slice(0, 3).map((doc) => (
+                <span key={doc.documentId} className="da-doc-chip" title={doc.fileName}>
+                  <span className="da-doc-chip-name">{doc.fileName}</span>
+                  <span className="da-doc-chip-meta">
+                    {doc.status === 'limited' ? 'Limited' : doc.status === 'ready_with_warnings' ? 'Warnings' : 'Ready'}
+                  </span>
+                </span>
+              ))}
+              {selectedDocs.length > 3 ? <span className="da-doc-more">+{selectedDocs.length - 3}</span> : null}
+            </div>
+          ) : null}
+
+          <textarea
+            ref={textareaRef}
+            rows={1}
+            value={input}
+            onChange={(event) => setInput(event.target.value)}
+            onKeyDown={onKeyDown}
+            disabled={loading || !chatEnabled}
+            placeholder={
+              !chatEnabled
+                ? mode === 'compare' && ids.length < 2
+                  ? 'Select at least two ready documents for Compare…'
+                  : 'Document not ready for questions yet…'
+                : 'Ask anything about your documents…'
+            }
+            aria-label="Message"
+          />
+
+          <div className="da-composer-bar">
+            <div className="da-composer-left" ref={modeMenuRef}>
+              <button
+                type="button"
+                className="da-mode-trigger"
+                aria-haspopup="listbox"
+                aria-expanded={modeOpen}
+                onClick={() => setModeOpen((open) => !open)}
+              >
+                {MODE_OPTIONS.find((m) => m.value === mode)?.label || 'Ask'}
+                <span aria-hidden="true">▾</span>
+              </button>
+              {modeOpen ? (
+                <div className="da-mode-menu" role="listbox" aria-label="Answer mode">
+                  {MODE_OPTIONS.map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      role="option"
+                      aria-selected={mode === option.value}
+                      disabled={option.value === 'compare' && ids.length < 2}
+                      className={mode === option.value ? 'is-active' : ''}
+                      onClick={() => {
+                        setMode(option.value);
+                        setModeOpen(false);
+                      }}
+                    >
+                      <strong>{option.label}</strong>
+                      <span>{option.description}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+
+            <button
+              type="button"
+              className="da-send"
+              onClick={() => sendMessage()}
+              disabled={loading || !chatEnabled || !input.trim()}
+              aria-label="Send message"
+            >
+              {loading ? <span className="da-send-spinner" /> : 'Send'}
+            </button>
+          </div>
+        </div>
+        <p className="da-composer-hint">Enter to send · Shift+Enter for a new line</p>
+      </footer>
     </section>
   );
 }
