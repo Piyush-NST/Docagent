@@ -11,6 +11,9 @@ import { chunkPageBlocks, chunkText } from '../src/lib/document-processor';
 import { validateUploadFile } from '../src/lib/file-validation';
 import { dedupeByContent, hybridScore, lexicalScore } from '../src/lib/retrieval';
 import { hashFileBuffer } from '../src/lib/file-hash';
+import { MemoryStore } from '../src/lib/store/memory-store';
+import { resetStoreForTests } from '../src/lib/store';
+import { searchDocument } from '../src/lib/vector-store';
 
 describe('isMeaningfulExtractedText', () => {
   it('rejects empty / whitespace / OCR failures', () => {
@@ -58,6 +61,16 @@ describe('chunking + readiness', () => {
   it('skips tiny meaningless chunks', () => {
     const chunks = chunkText('ok');
     assert.equal(chunks.length, 0);
+  });
+
+  it('splits long PDF-style blocks that have no blank lines', () => {
+    const text = Array.from({ length: 30 }, (_, index) =>
+      `Line ${index + 1} contains a distinct document fact with enough words for retrieval.`,
+    ).join('\n');
+    const chunks = chunkPageBlocks([{ page: 1, text }], 500, 50);
+    assert.ok(chunks.length > 1);
+    assert.ok(chunks.every((chunk) => chunk.content.length <= 520));
+    assert.ok(chunks.every((chunk) => chunk.page === 1));
   });
 
   it('builds ready and failed readiness correctly', () => {
@@ -141,6 +154,21 @@ describe('retrieval helpers', () => {
       { content: 'Completely different evidence about hiring plans.', relevance: 0.7 },
     ]);
     assert.equal(result.length, 2);
+  });
+
+  it('keeps all chunks for broad questions over a small document', async () => {
+    const store = new MemoryStore();
+    store.clearAll();
+    resetStoreForTests(store);
+    await store.replaceChunks('small-doc', [
+      { id: 'a', documentId: 'small-doc', content: 'Student verification details.', chunkIndex: 0, embedding: null, embeddingModel: null, fileName: 'letter.pdf', fileType: 'application/pdf', extractedAt: '2026-01-01', lexicalText: 'student verification' },
+      { id: 'b', documentId: 'small-doc', content: 'Tuition and semester fee details.', chunkIndex: 1, embedding: null, embeddingModel: null, fileName: 'letter.pdf', fileType: 'application/pdf', extractedAt: '2026-01-01', lexicalText: 'tuition semester fee' },
+      { id: 'c', documentId: 'small-doc', content: 'Payment account and deadline details.', chunkIndex: 2, embedding: null, embeddingModel: null, fileName: 'letter.pdf', fileType: 'application/pdf', extractedAt: '2026-01-01', lexicalText: 'payment account deadline' },
+    ]);
+
+    const result = await searchDocument('small-doc', 'What is this document about?', 3, { includeAllWhenSmall: true });
+    assert.equal(result.results.length, 3);
+    resetStoreForTests();
   });
 });
 

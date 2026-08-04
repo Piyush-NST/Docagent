@@ -79,7 +79,6 @@ function isQueryable(status?: string) {
 export default function AssistantWorkspace() {
   const [documents, setDocuments] = useState<Document[]>([]);
   const [selectedDoc, setSelectedDoc] = useState<Document | null>(null);
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -150,9 +149,6 @@ export default function AssistantWorkspace() {
       return [...without, newDoc];
     });
     setSelectedDoc(newDoc);
-    if (isQueryable(newDoc.status)) {
-      setSelectedIds([newDoc.documentId]);
-    }
   };
 
   const handleDeleteDocument = async (documentId: string) => {
@@ -160,7 +156,6 @@ export default function AssistantWorkspace() {
       const res = await fetch(`/api/documents?documentId=${documentId}`, { method: 'DELETE' });
       if (res.ok) {
         setDocuments((prev) => prev.filter((doc) => doc.documentId !== documentId));
-        setSelectedIds((prev) => prev.filter((id) => id !== documentId));
         if (selectedDoc?.documentId === documentId) setSelectedDoc(null);
       }
     } catch (err) {
@@ -170,19 +165,9 @@ export default function AssistantWorkspace() {
 
   const handleSelectDocument = (doc: Document) => {
     setSelectedDoc(doc);
-    if (isQueryable(doc.status)) {
-      setSelectedIds((prev) => (prev.includes(doc.documentId) ? prev : [doc.documentId]));
-    }
-  };
-
-  const toggleCompareDoc = (documentId: string) => {
-    setSelectedIds((prev) =>
-      prev.includes(documentId) ? prev.filter((id) => id !== documentId) : [...prev, documentId],
-    );
   };
 
   const documentReady = isQueryable(selectedDoc?.status || selectedDoc?.readiness?.status);
-  const readyDocs = documents.filter((doc) => isQueryable(doc.status));
 
   return (
     <>
@@ -213,27 +198,6 @@ export default function AssistantWorkspace() {
             onDeleteDocument={handleDeleteDocument}
           />
 
-          {readyDocs.length > 1 ? (
-            <section className="glass-card compare-select-card">
-              <div className="section-heading">
-                <span className="eyebrow">Multi-document</span>
-                <h2>Compare set</h2>
-                <p>Select two or more ready docs for Compare mode.</p>
-              </div>
-              <div className="compare-select-list">
-                {readyDocs.map((doc) => (
-                  <label key={doc.documentId} className="compare-select-item">
-                    <input
-                      type="checkbox"
-                      checked={selectedIds.includes(doc.documentId)}
-                      onChange={() => toggleCompareDoc(doc.documentId)}
-                    />
-                    <span>{doc.fileName}</span>
-                  </label>
-                ))}
-              </div>
-            </section>
-          ) : null}
         </aside>
 
         <div className="right-rail">
@@ -242,7 +206,6 @@ export default function AssistantWorkspace() {
           ) : null}
           <ChatInterface
             documentId={selectedDoc?.documentId || null}
-            documentIds={selectedIds.length ? selectedIds : selectedDoc?.documentId ? [selectedDoc.documentId] : []}
             documentName={selectedDoc?.fileName}
             documentReady={Boolean(documentReady)}
             documentStatus={selectedDoc?.status || selectedDoc?.readiness?.status}

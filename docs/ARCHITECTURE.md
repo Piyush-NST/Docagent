@@ -53,13 +53,14 @@ Answer + citations (from retrieved evidence only)
 
 ## AI provider
 
-DocAgent uses **Google Gemini only**:
+DocAgent uses explicit provider boundaries:
 
-- Chat / grounding: `GEMINI_MODEL` (default `gemini-2.0-flash`) via `src/lib/gemini.ts`
+- Generative answers: OpenRouter `OPENROUTER_MODEL` (default `nvidia/nemotron-3-ultra-550b-a55b:free`) with no model/provider fallback
+- OCR fallback: `GEMINI_OCR_MODEL` (default `gemini-2.5-flash`)
 - OCR: same chat model (vision) via `document-processor.ts`
 - Embeddings: `GEMINI_EMBEDDING_MODEL` (default `gemini-embedding-001`)
 
-There is no active Azure OpenAI / OpenAI chat path. API keys are server-side only.
+There is no Groq, random OpenRouter model, paid-model fallback, Azure OpenAI, or direct OpenAI chat path. API keys are server-side only.
 
 ## Retrieval
 

@@ -18,11 +18,15 @@ import {
 import { processDocument } from '@/lib/document-processor';
 import { buildFailedOcrReadiness, buildReadyReadiness, isDocumentQueryable } from '@/lib/document-status';
 import { isPersistenceError } from '@/lib/store';
+import { INDEX_VERSION, isCurrentIndexVersion } from '@/lib/config/indexing';
 
 const retryLocks = new Set<string>();
 
-function mapReadiness(recordReadiness: NonNullable<Awaited<ReturnType<typeof getDocumentRecord>>>['readiness']) {
-  return {
+function mapReadiness(
+  recordReadiness: NonNullable<Awaited<ReturnType<typeof getDocumentRecord>>>['readiness'],
+  requiresReindex = false,
+) {
+  const mapped = {
     status: recordReadiness.status,
     fileSize: recordReadiness.fileSize,
     textLength: recordReadiness.extractedTextLength,
@@ -41,6 +45,17 @@ function mapReadiness(recordReadiness: NonNullable<Awaited<ReturnType<typeof get
     errorCode: recordReadiness.errorCode,
     userMessage: recordReadiness.userMessage,
   };
+  return requiresReindex
+    ? {
+        ...mapped,
+        status: 'needs_attention' as const,
+        grounded: false,
+        indexStatus: 'Needs Attention' as const,
+        retrievalStatus: 'Failed' as const,
+        errorCode: 'INDEX_OUTDATED',
+        userMessage: `This document uses an older index. Delete it and upload it again to create index version ${INDEX_VERSION}.`,
+      }
+    : mapped;
 }
 
 export async function GET(request: NextRequest) {
@@ -61,7 +76,11 @@ export async function GET(request: NextRequest) {
         documentId,
         chunkCount: chunks.length,
         status: record?.status || (chunks.length > 0 ? 'ready' : 'ocr_failed'),
-        readiness: record?.readiness,
+        readiness: record?.readiness
+          ? mapReadiness(record.readiness, !isCurrentIndexVersion(record.indexVersion))
+          : undefined,
+        indexVersion: record?.indexVersion ?? null,
+        requiresReindex: record ? !isCurrentIndexVersion(record.indexVersion) : true,
         chunks: chunks.map((c) => ({
           id: c.id,
           page: c.page,
@@ -86,14 +105,18 @@ export async function GET(request: NextRequest) {
       const record = recordMap.get(id);
       const storeDoc = stats.documents.find((d) => d.documentId === id);
       const blob = blobDocs.find((b) => b.documentId === id);
+      const requiresReindex = record ? !isCurrentIndexVersion(record.indexVersion) : true;
 
       return {
         documentId: id,
         fileName: record?.fileName || storeDoc?.fileName || blob?.fileName || 'Unknown',
         fileType: record?.fileType || blob?.fileType,
         chunkCount: record?.chunkCount ?? storeDoc?.chunkCount ?? 0,
-        status: record?.status || (storeDoc && storeDoc.chunkCount > 0 ? 'ready' : 'ocr_failed'),
-        readiness: record?.readiness ? mapReadiness(record.readiness) : undefined,
+        status: requiresReindex ? 'needs_attention' : record?.status || (storeDoc && storeDoc.chunkCount > 0 ? 'ready' : 'ocr_failed'),
+        readiness: record?.readiness ? mapReadiness(record.readiness, requiresReindex) : undefined,
+        indexVersion: record?.indexVersion ?? null,
+        currentIndexVersion: INDEX_VERSION,
+        requiresReindex,
         blobInfo: blob,
       };
     });

@@ -6,7 +6,7 @@ import { DocumentChunk } from './document-processor';
 import { cosineSimilarity, generateEmbedding, generateQueryEmbedding } from './gemini';
 import { EMBEDDING_MODEL } from './config/readiness';
 import { RETRIEVAL_CONFIG, type RetrievalMode } from './config/retrieval';
-import { dedupeByContent, diversifyByDocument, hybridScore, lexicalScore, tokenize } from './retrieval';
+import { dedupeByContent, dedupeByDocumentContent, diversifyByDocument, hybridScore, lexicalScore, tokenize } from './retrieval';
 import { getStore } from './store';
 import type { PersistedChunk } from './store/types';
 
@@ -27,6 +27,7 @@ export interface SearchResult {
 export interface SearchOutcome {
   results: SearchResult[];
   retrievalMode: RetrievalMode;
+  embeddingAvailable: boolean;
 }
 
 function toSearchResult(chunk: PersistedChunk, relevance: number): SearchResult {
@@ -92,9 +93,9 @@ async function rankChunks(
   chunks: PersistedChunk[],
   query: string,
   topK: number,
-  options?: { diversifyDocumentIds?: string[] },
+  options?: { diversifyDocumentIds?: string[]; includeAllWhenSmall?: boolean },
 ): Promise<SearchOutcome> {
-  if (!chunks.length) return { results: [], retrievalMode: 'lexical_only' };
+  if (!chunks.length) return { results: [], retrievalMode: 'lexical_only', embeddingAvailable: false };
 
   const queryEmbedding = await generateQueryEmbedding(query);
   const compatibleModel = queryEmbedding && !queryEmbedding.degraded ? EMBEDDING_MODEL : null;
@@ -130,6 +131,10 @@ async function rankChunks(
 
   scored.sort((a, b) => b.relevance - a.relevance);
 
+  if (options?.includeAllWhenSmall && chunks.length <= topK) {
+    return { results: scored, retrievalMode, embeddingAvailable: canUseSemantic };
+  }
+
   const minScore =
     retrievalMode === 'hybrid'
       ? RETRIEVAL_CONFIG.minHybridRelevance
@@ -137,7 +142,9 @@ async function rankChunks(
 
   const filtered = scored.filter((item) => item.relevance >= minScore);
   const pool = filtered.length > 0 ? filtered : scored.slice(0, Math.min(topK, scored.length));
-  let results = dedupeByContent(pool);
+  let results = options?.diversifyDocumentIds
+    ? dedupeByDocumentContent(pool)
+    : dedupeByContent(pool);
 
   if (options?.diversifyDocumentIds && options.diversifyDocumentIds.length > 1) {
     results = diversifyByDocument(results, options.diversifyDocumentIds, topK);
@@ -145,20 +152,21 @@ async function rankChunks(
     results = results.slice(0, topK);
   }
 
-  return { results, retrievalMode };
+  return { results, retrievalMode, embeddingAvailable: canUseSemantic };
 }
 
 export async function searchDocument(
   documentId: string,
   query: string,
   topK: number = RETRIEVAL_CONFIG.defaultTopK,
+  options?: { includeAllWhenSmall?: boolean },
 ): Promise<SearchOutcome> {
   const chunks = await getStore().getChunks(documentId);
   if (!chunks.length) {
     console.log(`No chunks found for doc ${documentId}`);
-    return { results: [], retrievalMode: 'lexical_only' };
+    return { results: [], retrievalMode: 'lexical_only', embeddingAvailable: false };
   }
-  return rankChunks(chunks, query, topK);
+  return rankChunks(chunks, query, topK, options);
 }
 
 export async function searchDocuments(
@@ -168,7 +176,7 @@ export async function searchDocuments(
   options?: { diversify?: boolean },
 ): Promise<SearchOutcome> {
   const chunks = await getStore().getChunksForDocuments(documentIds);
-  if (!chunks.length) return { results: [], retrievalMode: 'lexical_only' };
+  if (!chunks.length) return { results: [], retrievalMode: 'lexical_only', embeddingAvailable: false };
   return rankChunks(chunks, query, topK, {
     diversifyDocumentIds: options?.diversify ? documentIds : undefined,
   });

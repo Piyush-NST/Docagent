@@ -17,6 +17,7 @@ export interface PersistedDocument {
   ocrSkippedPages?: number;
   chunkCount: number;
   warnings?: string[];
+  indexVersion?: number;
 }
 
 export interface PersistedChunk {

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { isDocumentReady } from '../src/lib/document-status';
+import { INDEX_VERSION, isCurrentIndexVersion } from '../src/lib/config/indexing';
 
 describe('chat API readiness policy', () => {
   it('rejects non-ready document statuses', () => {
@@ -25,5 +26,11 @@ describe('chat API readiness policy', () => {
     };
     assert.equal(body.error, 'DOCUMENT_NOT_READY');
     assert.equal(body.status, 'ocr_failed');
+  });
+
+  it('requires persisted documents to use the current index schema', () => {
+    assert.equal(isCurrentIndexVersion(undefined), false);
+    assert.equal(isCurrentIndexVersion(INDEX_VERSION - 1), false);
+    assert.equal(isCurrentIndexVersion(INDEX_VERSION), true);
   });
 });

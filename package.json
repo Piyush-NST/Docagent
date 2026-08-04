@@ -9,6 +9,7 @@
     "lint": "eslint",
     "test": "DOCAGENT_STORAGE=memory USE_MOCK_MODE=true tsx --test tests/**/*.test.ts evaluation/retrieval-fixtures.ts",
     "eval:retrieval": "DOCAGENT_STORAGE=memory USE_MOCK_MODE=true tsx --test evaluation/retrieval-fixtures.ts",
+    "eval:answers": "DOCAGENT_STORAGE=file USE_MOCK_MODE=true tsx evaluation/answer-quality.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

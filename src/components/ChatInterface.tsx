@@ -1,6 +1,8 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { friendlyDocumentName, type AnswerSection, type StructuredAnswer } from '@/lib/structured-answer';
+import AssistantThinkingState from '@/components/AssistantThinkingState';
 
 interface Source {
   chunkId: string;
@@ -19,8 +21,12 @@ interface Message {
   sources?: Source[];
   isGrounded?: boolean;
   failureKind?: string;
+  structuredAnswer?: StructuredAnswer;
+  coverageNotice?: string;
+  generationNotice?: string;
   timestamp: Date;
   systemHint?: boolean;
+  retryQuestion?: string;
 }
 
 export interface ChatDocumentContext {
@@ -41,12 +47,11 @@ interface ChatInterfaceProps {
   documents?: ChatDocumentContext[];
 }
 
-type ChatMode = 'ask' | 'summarize' | 'compare' | 'extract';
+type ChatMode = 'ask' | 'summarize' | 'extract';
 
 const MODE_OPTIONS: Array<{ value: ChatMode; label: string; description: string }> = [
   { value: 'ask', label: 'Ask', description: 'Answer questions using document evidence' },
   { value: 'summarize', label: 'Summarize', description: 'Create a grounded document summary' },
-  { value: 'compare', label: 'Compare', description: 'Compare selected documents' },
   { value: 'extract', label: 'Extract', description: 'Return requested structured information' },
 ];
 
@@ -110,6 +115,7 @@ function AnswerContent({ content, sources, onCite }: { content: string; sources?
       | { type: 'list'; ordered: boolean; items: string[] }
       | { type: 'table'; headers: string[]; rows: string[][] }
       | { type: 'kv'; pairs: Array<{ key: string; value: string }> }
+      | { type: 'code'; language?: string; text: string }
     > = [];
 
     let i = 0;
@@ -118,6 +124,19 @@ function AnswerContent({ content, sources, onCite }: { content: string; sources?
       const trimmed = line.trim();
       if (!trimmed) {
         i += 1;
+        continue;
+      }
+
+      if (trimmed.startsWith('```')) {
+        const language = trimmed.slice(3).trim() || undefined;
+        const code: string[] = [];
+        i += 1;
+        while (i < lines.length && !lines[i].trim().startsWith('```')) {
+          code.push(lines[i]);
+          i += 1;
+        }
+        if (i < lines.length) i += 1;
+        out.push({ type: 'code', language, text: code.join('\n') });
         continue;
       }
 
@@ -250,6 +269,13 @@ function AnswerContent({ content, sources, onCite }: { content: string; sources?
             </dl>
           );
         }
+        if (block.type === 'code') {
+          return (
+            <pre key={`code-${idx}`} className="da-code-block" data-language={block.language}>
+              <code>{block.text}</code>
+            </pre>
+          );
+        }
         return (
           <p key={`p-${idx}`} className="da-answer-p">
             {formatInline(block.text, `p-${idx}`)}
@@ -270,10 +296,85 @@ function AnswerContent({ content, sources, onCite }: { content: string; sources?
   );
 }
 
+function CitationLinks({ ids, sources, onCite }: { ids?: number[]; sources?: Source[]; onCite?: (s: Source) => void }) {
+  if (!ids?.length || !sources?.length) return null;
+  return (
+    <span className="da-citations" aria-label="Citations">
+      {ids.map((id) => {
+        const source = sources[id - 1];
+        return source ? (
+          <button key={id} type="button" className="da-cite-inline" onClick={() => onCite?.(source)} aria-label={`Open source ${id}`}>
+            [{id}]
+          </button>
+        ) : null;
+      })}
+    </span>
+  );
+}
+
+function StructuredSection({ section, sources, onCite }: { section: AnswerSection; sources?: Source[]; onCite?: (s: Source) => void }) {
+  return (
+    <section className={`da-structured-section da-section-${section.type}`}>
+      {section.title ? <h3>{section.title}</h3> : null}
+      {section.type === 'text' ? (
+        <p>{section.body}<CitationLinks ids={section.citationIds} sources={sources} onCite={onCite} /></p>
+      ) : null}
+      {section.type === 'bullets' ? (
+        <ul className="da-structured-list">
+          {section.items.map((item, index) => (
+            <li key={`${item.text}-${index}`}><span>{item.text}</span><CitationLinks ids={item.citationIds} sources={sources} onCite={onCite} /></li>
+          ))}
+        </ul>
+      ) : null}
+      {section.type === 'key_value' ? (
+        <dl className="da-structured-kv">
+          {section.items.map((item, index) => (
+            <div key={`${item.label}-${index}`}>
+              <dt>{item.label}</dt>
+              <dd>{item.value}<CitationLinks ids={item.citationIds} sources={sources} onCite={onCite} /></dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
+      {section.type === 'table' ? (
+        <div className="da-table-wrap">
+          <table className="da-table">
+            <thead><tr>{section.columns.map((column) => <th key={column}>{column}</th>)}</tr></thead>
+            <tbody>{section.rows.map((row, rowIndex) => (
+              <tr key={rowIndex}>{row.map((cell, cellIndex) => <td key={cellIndex}>{cell}</td>)}</tr>
+            ))}</tbody>
+          </table>
+          <CitationLinks ids={section.citationIds} sources={sources} onCite={onCite} />
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function StructuredAnswerContent({ answer, sources, onCite }: { answer: StructuredAnswer; sources?: Source[]; onCite?: (s: Source) => void }) {
+  const isProfile = answer.answerType === 'profile';
+  const isSimple = answer.answerType === 'text' && answer.sections.length === 0;
+  const titleIsProse = Boolean(answer.title && (answer.title.length > 72 || /[.!?]\s/.test(answer.title)));
+  return (
+    <div className={`da-structured-answer is-${answer.answerType}${isSimple ? ' is-simple' : ''}${titleIsProse ? ' has-prose-title' : ''}`}>
+      {(answer.title || answer.subtitle || answer.summary) ? (
+        <header className={isProfile ? 'da-profile-head' : 'da-answer-head'}>
+          {answer.title ? (
+            titleIsProse ? <p className="da-answer-title-prose">{answer.title}</p> : <h2>{answer.title}</h2>
+          ) : null}
+          {answer.subtitle ? <p className="da-answer-subtitle">{answer.subtitle}</p> : null}
+          {answer.summary ? <p className="da-answer-summary">{answer.summary}<CitationLinks ids={answer.citationIds} sources={sources} onCite={onCite} /></p> : null}
+          {!answer.summary ? <CitationLinks ids={answer.citationIds} sources={sources} onCite={onCite} /> : null}
+        </header>
+      ) : null}
+      {answer.sections.map((section, index) => <StructuredSection key={`${section.type}-${section.title || index}`} section={section} sources={sources} onCite={onCite} />)}
+    </div>
+  );
+}
+
 function sourceLabel(source: Source, index: number) {
-  const name = source.fileName || `Source ${index + 1}`;
-  const short = name.length > 36 ? `${name.slice(0, 33)}…` : name;
-  return source.page ? `${short} · p.${source.page}` : short;
+  const name = source.fileName ? friendlyDocumentName(source.fileName) : `Source ${index + 1}`;
+  return source.page ? `${name} · Page ${source.page}` : name;
 }
 
 export default function ChatInterface({
@@ -292,13 +393,17 @@ export default function ChatInterface({
   const [activeSource, setActiveSource] = useState<Source | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [showJump, setShowJump] = useState(false);
-  const [genStep, setGenStep] = useState(0);
+  const [requestStartedAt, setRequestStartedAt] = useState<number | null>(null);
+  const [thinkingExiting, setThinkingExiting] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const stickToBottomRef = useRef(true);
   const modeMenuRef = useRef<HTMLDivElement>(null);
+  const requestControllerRef = useRef<AbortController | null>(null);
+  const silentAbortRef = useRef(false);
+  const transitionTimerRef = useRef<number | null>(null);
 
   const ids = useMemo(
     () => (documentIds.length > 0 ? documentIds : documentId ? [documentId] : []),
@@ -317,14 +422,13 @@ export default function ChatInterface({
     return [];
   }, [documents, documentId, documentName, documentStatus, ids]);
 
-  const chatEnabled = ids.length > 0 && documentReady && (mode !== 'compare' || ids.length >= 2);
+  const chatEnabled = ids.length > 0 && documentReady;
   const isLimited = documentStatus === 'limited' || selectedDocs.some((d) => d.status === 'limited');
   const isWarning = documentStatus === 'ready_with_warnings' || selectedDocs.some((d) => d.status === 'ready_with_warnings');
   const conversationStarted = messages.some((m) => m.role === 'user');
 
   const suggestions = useMemo(() => {
     if (mode === 'summarize') return ['Summarize this document', 'What are the key findings?', 'List important dates'];
-    if (mode === 'compare') return ['Compare the uploaded reports', 'What changed between these documents?', 'Compare revenue and profit'];
     if (mode === 'extract') return ['Extract dates and amounts', 'Extract names and organizations', 'Extract key obligations'];
     return ['Summarize this document', 'What are the key findings?', 'Find the key risks', 'List important dates'];
   }, [mode]);
@@ -348,18 +452,6 @@ export default function ChatInterface({
     return () => document.removeEventListener('mousedown', onDocClick);
   }, []);
 
-  useEffect(() => {
-    if (!loading) {
-      setGenStep(0);
-      return;
-    }
-    const timers = [
-      window.setTimeout(() => setGenStep(1), 700),
-      window.setTimeout(() => setGenStep(2), 1600),
-    ];
-    return () => timers.forEach((t) => window.clearTimeout(t));
-  }, [loading]);
-
   const scrollToLatest = useCallback((smooth = true) => {
     messagesEndRef.current?.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto', block: 'end' });
   }, []);
@@ -378,10 +470,22 @@ export default function ChatInterface({
 
   useEffect(() => {
     // Reset thread when selection changes; empty thread shows empty state (no fake welcome bubble)
+    silentAbortRef.current = true;
+    if (transitionTimerRef.current != null) window.clearTimeout(transitionTimerRef.current);
+    requestControllerRef.current?.abort();
     setMessages([]);
     setActiveSource(null);
     setInput('');
   }, [documentId, selectionKey, documentReady]);
+
+  useEffect(
+    () => () => {
+      silentAbortRef.current = true;
+      if (transitionTimerRef.current != null) window.clearTimeout(transitionTimerRef.current);
+      requestControllerRef.current?.abort();
+    },
+    [],
+  );
 
   const copyAnswer = async (message: Message) => {
     try {
@@ -393,19 +497,29 @@ export default function ChatInterface({
     }
   };
 
-  const sendMessage = async (question = input) => {
+  const sendMessage = async (question = input, appendUserMessage = true) => {
     if (!question.trim() || ids.length === 0 || loading || !chatEnabled) return;
+
+    const normalizedQuestion = question.trim();
+    const controller = new AbortController();
+    const startedAt = Date.now();
+    requestControllerRef.current = controller;
+    silentAbortRef.current = false;
 
     const userMsg: Message = {
       id: `u-${Date.now()}`,
       role: 'user',
-      content: question.trim(),
+      content: normalizedQuestion,
       timestamp: new Date(),
     };
 
-    setMessages((prev) => [...prev.filter((m) => !m.systemHint), userMsg]);
+    if (appendUserMessage) {
+      setMessages((prev) => [...prev.filter((m) => !m.systemHint), userMsg]);
+    }
     setInput('');
     setLoading(true);
+    setRequestStartedAt(startedAt);
+    setThinkingExiting(false);
     setActiveSource(null);
     stickToBottomRef.current = true;
     window.requestAnimationFrame(() => {
@@ -421,9 +535,14 @@ export default function ChatInterface({
         body: JSON.stringify({
           documentId: ids[0],
           documentIds: ids,
-          question: userMsg.content,
+          question: normalizedQuestion,
           mode,
+          history: messages
+            .filter((message) => !message.systemHint && !message.failureKind)
+            .slice(-6)
+            .map((message) => ({ role: message.role, content: message.content })),
         }),
+        signal: controller.signal,
       });
 
       const data = await res.json();
@@ -432,6 +551,8 @@ export default function ChatInterface({
         const message =
           data.error === 'DOCUMENT_NOT_READY'
             ? data.message || 'Selected documents are not ready for questions yet.'
+            : data.error === 'INDEX_OUTDATED'
+              ? data.message || 'This document must be uploaded again before it can be queried.'
             : data.message || 'DocAgent couldn’t generate a response right now. Your documents are still available.';
         setMessages((prev) => [
           ...prev,
@@ -441,11 +562,29 @@ export default function ChatInterface({
             content: message,
             isGrounded: false,
             failureKind: data.failureKind || 'generation_error',
+            retryQuestion: normalizedQuestion,
             timestamp: new Date(),
           },
         ]);
         return;
       }
+
+      setThinkingExiting(true);
+      await new Promise<void>((resolve, reject) => {
+        const onAbort = () => {
+          if (transitionTimerRef.current != null) window.clearTimeout(transitionTimerRef.current);
+          transitionTimerRef.current = null;
+          const abortError = new Error('Response stopped');
+          abortError.name = 'AbortError';
+          reject(abortError);
+        };
+        controller.signal.addEventListener('abort', onAbort, { once: true });
+        transitionTimerRef.current = window.setTimeout(() => {
+          controller.signal.removeEventListener('abort', onAbort);
+          transitionTimerRef.current = null;
+          resolve();
+        }, 180);
+      });
 
       setMessages((prev) => [
         ...prev,
@@ -458,24 +597,49 @@ export default function ChatInterface({
           sources: data.sources,
           isGrounded: data.isGrounded,
           failureKind: data.failureKind,
+          structuredAnswer: data.structuredAnswer,
+          coverageNotice: data.coverageNotice,
+          generationNotice: data.generationNotice,
           timestamp: new Date(),
         },
       ]);
-    } catch {
+    } catch (error) {
+      const wasAborted = error instanceof Error && error.name === 'AbortError';
+      if (wasAborted && silentAbortRef.current) return;
+
       setMessages((prev) => [
         ...prev,
         {
           id: `e-${Date.now()}`,
           role: 'assistant',
-          content: 'DocAgent couldn’t generate a response right now. Your documents are still available.',
+          content: wasAborted
+            ? 'Response stopped.'
+            : 'DocAgent couldn’t generate a response right now. Your documents are still available.',
           isGrounded: false,
-          failureKind: 'generation_error',
+          failureKind: wasAborted ? 'aborted' : 'generation_error',
+          retryQuestion: wasAborted ? undefined : normalizedQuestion,
           timestamp: new Date(),
         },
       ]);
     } finally {
-      setLoading(false);
+      if (requestControllerRef.current === controller) {
+        requestControllerRef.current = null;
+        setLoading(false);
+        setRequestStartedAt(null);
+        setThinkingExiting(false);
+      }
     }
+  };
+
+  const cancelResponse = () => {
+    silentAbortRef.current = false;
+    requestControllerRef.current?.abort();
+  };
+
+  const retryMessage = (message: Message) => {
+    if (!message.retryQuestion || loading) return;
+    setMessages((prev) => prev.filter((item) => item.id !== message.id));
+    void sendMessage(message.retryQuestion, false);
   };
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -508,8 +672,6 @@ export default function ChatInterface({
     }
     return 'Partial document coverage. Answers may only reflect processed content.';
   }, [isLimited, selectedDocs]);
-
-  const genLabels = ['Searching your documents…', 'Reading relevant passages…', 'Writing a grounded answer…'];
 
   if (!documentId) {
     return (
@@ -620,7 +782,7 @@ export default function ChatInterface({
                 );
               }
 
-              const noEvidence = msg.failureKind === 'no_evidence' || msg.isGrounded === false;
+              const noEvidence = msg.failureKind === 'no_evidence';
               return (
                 <article key={msg.id} className="da-msg da-msg-assistant">
                   <div className="da-assistant-meta">
@@ -628,17 +790,28 @@ export default function ChatInterface({
                       D
                     </span>
                     <span>DocAgent</span>
-                    {msg.isGrounded ? <span className="da-pill da-pill-ok">Grounded</span> : null}
+                    {msg.isGrounded ? (
+                      <span className="da-grounded-note">
+                        Grounded{msg.sources?.length ? ` in ${msg.sources.length} source${msg.sources.length === 1 ? '' : 's'}` : ''}
+                      </span>
+                    ) : null}
                     {noEvidence && !msg.failureKind?.includes('error') ? (
                       <span className="da-pill da-pill-muted">No evidence</span>
                     ) : null}
                   </div>
 
-                  <AnswerContent content={msg.content} sources={msg.sources} onCite={setActiveSource} />
+                  {msg.structuredAnswer ? (
+                    <StructuredAnswerContent answer={msg.structuredAnswer} sources={msg.sources} onCite={setActiveSource} />
+                  ) : (
+                    <AnswerContent content={msg.content} sources={msg.sources} onCite={setActiveSource} />
+                  )}
+
+                  {msg.coverageNotice ? <p className="da-coverage-note">{msg.coverageNotice}</p> : null}
+                  {msg.generationNotice ? <p className="da-coverage-note">{msg.generationNotice}</p> : null}
 
                   {msg.sources && msg.sources.length > 0 ? (
-                    <div className="da-sources">
-                      <span className="da-sources-label">Sources</span>
+                    <details className="da-sources">
+                      <summary>{msg.sources.length} source{msg.sources.length === 1 ? '' : 's'}</summary>
                       <div className="da-source-list">
                         {msg.sources.map((source, idx) => (
                           <button
@@ -652,7 +825,7 @@ export default function ChatInterface({
                           </button>
                         ))}
                       </div>
-                    </div>
+                    </details>
                   ) : null}
 
                   <div className="da-msg-actions">
@@ -664,14 +837,8 @@ export default function ChatInterface({
                         Show evidence
                       </button>
                     ) : null}
-                    {msg.failureKind === 'generation_error' || msg.failureKind === 'no_evidence' ? (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const lastUser = [...messages].reverse().find((m) => m.role === 'user');
-                          if (lastUser) sendMessage(lastUser.content);
-                        }}
-                      >
+                    {msg.retryQuestion ? (
+                      <button type="button" onClick={() => retryMessage(msg)} disabled={loading}>
                         Retry
                       </button>
                     ) : null}
@@ -681,22 +848,12 @@ export default function ChatInterface({
             })}
 
             {loading ? (
-              <article className="da-msg da-msg-assistant" aria-live="polite" aria-busy="true">
-                <div className="da-assistant-meta">
-                  <span className="da-assistant-mark" aria-hidden="true">
-                    D
-                  </span>
-                  <span>DocAgent</span>
-                </div>
-                <div className="da-generating">
-                  <span className="da-gen-dots" aria-hidden="true">
-                    <i />
-                    <i />
-                    <i />
-                  </span>
-                  <span>{genLabels[genStep] || genLabels[0]}</span>
-                </div>
-              </article>
+              <AssistantThinkingState
+                startedAt={requestStartedAt ?? undefined}
+                fileName={selectedDocs.length === 1 ? selectedDocs[0].fileName : undefined}
+                onCancel={cancelResponse}
+                exiting={thinkingExiting}
+              />
             ) : null}
 
             <div ref={messagesEndRef} />
@@ -754,13 +911,7 @@ export default function ChatInterface({
             onChange={(event) => setInput(event.target.value)}
             onKeyDown={onKeyDown}
             disabled={loading || !chatEnabled}
-            placeholder={
-              !chatEnabled
-                ? mode === 'compare' && ids.length < 2
-                  ? 'Select at least two ready documents for Compare…'
-                  : 'Document not ready for questions yet…'
-                : 'Ask anything about your documents…'
-            }
+            placeholder={!chatEnabled ? 'Document not ready for questions yet…' : 'Ask anything about your documents…'}
             aria-label="Message"
           />
 
@@ -784,7 +935,6 @@ export default function ChatInterface({
                       type="button"
                       role="option"
                       aria-selected={mode === option.value}
-                      disabled={option.value === 'compare' && ids.length < 2}
                       className={mode === option.value ? 'is-active' : ''}
                       onClick={() => {
                         setMode(option.value);

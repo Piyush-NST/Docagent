@@ -4,7 +4,7 @@ import { MemoryStore } from '../src/lib/store/memory-store';
 import { resetStoreForTests } from '../src/lib/store';
 import { buildReadyReadiness, isDocumentQueryable } from '../src/lib/document-status';
 import { cosineSimilarity } from '../src/lib/gemini';
-import { diversifyByDocument, hybridScore, lexicalScore } from '../src/lib/retrieval';
+import { dedupeByDocumentContent, diversifyByDocument, hybridScore, lexicalScore } from '../src/lib/retrieval';
 import { READINESS_THRESHOLDS } from '../src/lib/config/readiness';
 import { RETRIEVAL_CONFIG } from '../src/lib/config/retrieval';
 
@@ -219,6 +219,17 @@ describe('retrieval math', () => {
     assert.ok(selected.some((s) => s.documentId === 'a'));
     assert.ok(selected.some((s) => s.documentId === 'b'));
     assert.equal(selected.length, 4);
+  });
+
+  it('keeps matching evidence from different documents during comparison', () => {
+    const items = [
+      { documentId: 'a', relevance: 0.9, content: 'Revenue increased by twenty percent this year.' },
+      { documentId: 'a', relevance: 0.8, content: 'Revenue increased by twenty percent this year.' },
+      { documentId: 'b', relevance: 0.7, content: 'Revenue increased by twenty percent this year.' },
+    ];
+    const selected = dedupeByDocumentContent(items);
+    assert.equal(selected.length, 2);
+    assert.deepEqual(selected.map((item) => item.documentId), ['a', 'b']);
   });
 
   it('lexical score still works for exact overlap', () => {

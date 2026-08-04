@@ -6,7 +6,7 @@ import { isMeaningfulExtractedText } from '@/lib/text-validation';
 import type { DocumentProcessingStatus, PageProcessingStats } from '@/lib/document-status';
 import { OCR_FAILED_USER_MESSAGE } from '@/lib/document-status';
 import { isLikelyPasswordProtectedError } from '@/lib/file-validation';
-import { MAX_OCR_PAGES, READINESS_THRESHOLDS } from '@/lib/config/readiness';
+import { MAX_OCR_PAGES, OCR_MODEL, READINESS_THRESHOLDS } from '@/lib/config/readiness';
 
 export interface DocumentChunk {
   id: string;
@@ -81,7 +81,7 @@ async function callGeminiOcr(
 
   console.log(`[OCR] ${label} started`);
   const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({ model: process.env.GEMINI_MODEL || 'gemini-2.0-flash' });
+  const model = genAI.getGenerativeModel({ model: OCR_MODEL });
   const base64 = imageBuffer.toString('base64');
 
   const result = await model.generateContent([
@@ -353,6 +353,35 @@ export function detectDocumentType(contentType: string, fileName: string): 'pdf'
 
 export type PageBlock = { page?: number; text: string; section?: string };
 
+function splitOversizedBlock(text: string, maxLength: number): string[] {
+  if (text.length <= maxLength) return [text];
+  const units = text.split(/\n+|(?<=[.!?])\s+/).map((unit) => unit.trim()).filter(Boolean);
+  const pieces: string[] = [];
+  let current = '';
+
+  const append = (unit: string) => {
+    if (current && current.length + unit.length + 1 > maxLength) {
+      pieces.push(current);
+      current = '';
+    }
+    if (unit.length <= maxLength) {
+      current = current ? `${current} ${unit}` : unit;
+      return;
+    }
+    for (const word of unit.split(/\s+/)) {
+      if (current && current.length + word.length + 1 > maxLength) {
+        pieces.push(current);
+        current = '';
+      }
+      current = current ? `${current} ${word}` : word;
+    }
+  };
+
+  units.forEach(append);
+  if (current) pieces.push(current);
+  return pieces;
+}
+
 /**
  * Chunk page-aware blocks while preserving page metadata and keeping tables together.
  */
@@ -383,7 +412,8 @@ export function chunkPageBlocks(
       }
     }
 
-    const paragraphs = clean.split(/\n\n+/);
+    const unitSize = Math.max(100, size - overlap);
+    const paragraphs = clean.split(/\n\n+/).flatMap((paragraph) => splitOversizedBlock(paragraph, unitSize));
     let current = '';
     let start = globalIndex;
 

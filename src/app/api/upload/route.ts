@@ -19,6 +19,7 @@ import {
   formatBytes,
 } from '@/lib/upload-limits';
 import { isPersistenceError } from '@/lib/store';
+import { INDEX_VERSION, isCurrentIndexVersion } from '@/lib/config/indexing';
 
 const STORAGE_TIMEOUT_MS = 20_000;
 const RECEIVE_FILE_TIMEOUT_MS = 45_000;
@@ -122,6 +123,19 @@ export async function POST(request: NextRequest) {
     const contentHash = hashFileBuffer(buffer);
 
     const existing = await findDocumentByHash(contentHash);
+    if (existing && isDocumentQueryable(existing.status) && !isCurrentIndexVersion(existing.indexVersion)) {
+      return NextResponse.json(
+        {
+          error: 'INDEX_OUTDATED',
+          message: `This file uses an older document index. Delete it and upload it again to create index version ${INDEX_VERSION}.`,
+          documentId: existing.documentId,
+          currentIndexVersion: INDEX_VERSION,
+          storedIndexVersion: existing.indexVersion ?? null,
+        },
+        { status: 409 },
+      );
+    }
+
     if (existing && isDocumentQueryable(existing.status)) {
       return NextResponse.json({
         success: true,

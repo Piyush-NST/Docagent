@@ -20,8 +20,11 @@ CREATE TABLE IF NOT EXISTS documents (
   chunk_count INTEGER NOT NULL DEFAULT 0,
   readiness JSONB NOT NULL,
   warnings JSONB,
+  index_version INTEGER,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS index_version INTEGER;
 
 CREATE UNIQUE INDEX IF NOT EXISTS documents_content_hash_uidx
   ON documents (content_hash)
@@ -100,6 +103,7 @@ function rowToDocument(row: Record<string, unknown>): PersistedDocument {
     ocrSkippedPages: row.ocr_skipped_pages == null ? undefined : Number(row.ocr_skipped_pages),
     chunkCount: Number(row.chunk_count || 0),
     warnings: Array.isArray(row.warnings) ? (row.warnings as string[]) : undefined,
+    indexVersion: row.index_version == null ? undefined : Number(row.index_version),
   };
 }
 
@@ -136,13 +140,13 @@ export class PostgresStore implements DocAgentStore {
       INSERT INTO documents (
         document_id, file_name, file_type, file_size, content_hash, uploaded_at, status,
         pages, processed_pages, native_text_pages, ocr_pages, ocr_failed_pages, ocr_skipped_pages,
-        chunk_count, readiness, warnings
+        chunk_count, readiness, warnings, index_version
       ) VALUES (
         ${doc.documentId}, ${doc.fileName}, ${doc.fileType}, ${doc.fileSize}, ${doc.contentHash || null},
         ${doc.uploadedAt}, ${doc.status}, ${doc.pages ?? null}, ${doc.processedPages ?? null},
         ${doc.nativeTextPages ?? null}, ${doc.ocrPages ?? null}, ${doc.ocrFailedPages ?? null},
         ${doc.ocrSkippedPages ?? null}, ${doc.chunkCount}, ${sql.json(doc.readiness as never)},
-        ${doc.warnings ? sql.json(doc.warnings as never) : null}
+        ${doc.warnings ? sql.json(doc.warnings as never) : null}, ${doc.indexVersion ?? null}
       )
       ON CONFLICT (document_id) DO UPDATE SET
         file_name = EXCLUDED.file_name,
@@ -159,7 +163,8 @@ export class PostgresStore implements DocAgentStore {
         ocr_skipped_pages = EXCLUDED.ocr_skipped_pages,
         chunk_count = EXCLUDED.chunk_count,
         readiness = EXCLUDED.readiness,
-        warnings = EXCLUDED.warnings
+        warnings = EXCLUDED.warnings,
+        index_version = EXCLUDED.index_version
     `;
   }
 

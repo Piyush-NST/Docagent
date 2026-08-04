@@ -62,6 +62,20 @@ export function dedupeByContent<T extends { content: string; relevance: number }
   return kept;
 }
 
+/** Preserve matching evidence across files while removing repetition within each file. */
+export function dedupeByDocumentContent<
+  T extends { content: string; relevance: number; documentId: string },
+>(items: T[]): T[] {
+  const byDocument = new Map<string, T[]>();
+  for (const item of items) {
+    const group = byDocument.get(item.documentId) || [];
+    group.push(item);
+    byDocument.set(item.documentId, group);
+  }
+  const kept = new Set(Array.from(byDocument.values()).flatMap((group) => dedupeByContent(group)));
+  return items.filter((item) => kept.has(item));
+}
+
 /**
  * For COMPARE mode: ensure evidence diversity across documents when possible.
  */

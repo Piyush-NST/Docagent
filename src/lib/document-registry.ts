@@ -6,6 +6,7 @@
 import type { DocumentReadinessPayload, DocumentProcessingStatus } from './document-status';
 import { getStore } from './store';
 import type { PersistedDocument } from './store/types';
+import { INDEX_VERSION } from './config/indexing';
 
 export type DocumentRecord = PersistedDocument;
 
@@ -61,5 +62,6 @@ export function toPersistedDocument(args: {
     ocrSkippedPages: stats?.ocrSkippedPages,
     chunkCount: args.readiness.chunksCreated,
     warnings: args.readiness.warnings,
+    indexVersion: INDEX_VERSION,
   };
 }

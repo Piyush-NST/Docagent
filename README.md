@@ -1,6 +1,6 @@
 # DocAgent - Document Q&A with AI
 
-A premium document intelligence app for uploading files and asking grounded questions. Uses Gemini for answers and image OCR.
+A premium document intelligence app for uploading files and asking grounded questions. Uses a pinned OpenRouter model for generative answers and Gemini for image OCR and semantic embeddings.
 
 🔗 **Live Demo**: https://docagent-ai-rag-system.vercel.app/
 
@@ -19,7 +19,7 @@ A premium document intelligence app for uploading files and asking grounded ques
 
 - **Frontend**: Next.js, React, TypeScript, Framer Motion
 - **Backend**: Next.js API Routes
-- **AI/LLM**: Google Gemini (`gemini-2.0-flash`)
+- **AI/LLM**: OpenRouter (`nvidia/nemotron-3-ultra-550b-a55b:free`)
 - **OCR**: Google Gemini Vision — image/scanned text extraction
 - **Storage**: In-memory (Azure Blob optional)
 - **Text Extraction**: `unpdf` for PDFs, `mammoth` for DOCX
@@ -29,7 +29,8 @@ A premium document intelligence app for uploading files and asking grounded ques
 ### Prerequisites
 
 - Node.js 18+
-- Gemini API key (from https://aistudio.google.com/app/apikey)
+- OpenRouter API key (from https://openrouter.ai/settings/keys)
+- Gemini API key for OCR and semantic embeddings (from https://aistudio.google.com/app/apikey)
 
 ### Installation
 
@@ -44,8 +45,11 @@ cp .env.example .env.local
 Add your API keys to `.env.local`:
 
 ```
+OPENROUTER_API_KEY=your_openrouter_key
+OPENROUTER_MODEL=nvidia/nemotron-3-ultra-550b-a55b:free
 GEMINI_API_KEY=your_gemini_key
-GEMINI_MODEL=gemini-2.0-flash
+GEMINI_OCR_MODEL=gemini-2.5-flash
+GEMINI_EMBEDDING_MODEL=gemini-embedding-001
 ```
 
 Then start:
@@ -70,13 +74,13 @@ Upload a document. It is stored and assigned a unique ID.
 
 ### 3. Chunking & Embedding
 
-Text is split into ~500 character chunks with overlap. Each chunk gets a local hash-based embedding for lightweight similarity search.
+Text is split into page-aware chunks with overlap. Each chunk receives a Gemini semantic embedding when the configured project has embedding access; lexical retrieval remains available as a fallback.
 
 ### 4. Question Answering
 
 1. Find relevant chunks via similarity search
 2. Build a prompt with those chunks as context
-3. Send to Gemini with grounding instructions
+3. Send synthesis questions to the exact configured OpenRouter model with grounding instructions
 4. Return the answer with source citations
 
 ### 5. Grounding
@@ -120,10 +124,17 @@ docagent-ai-rag-system/
 
 ## AI provider
 
-DocAgent uses **Google Gemini only** (`src/lib/gemini.ts`):
+DocAgent uses two explicitly scoped providers (`src/lib/gemini.ts`):
 
-- Chat + OCR: `GEMINI_MODEL`
+- Grounded generative answers: `OPENROUTER_MODEL` (pinned to `nvidia/nemotron-3-ultra-550b-a55b:free`)
+- OCR fallback: `GEMINI_OCR_MODEL` (default `gemini-2.5-flash`)
 - Semantic embeddings: `GEMINI_EMBEDDING_MODEL` (default `gemini-embedding-001`)
+
+The OpenRouter request contains one explicit `:free` model, no model fallback list, and provider fallbacks are disabled. NVIDIA's free endpoint does not currently accept OpenRouter's provider-side JSON response parameter, so DocAgent enforces JSON through its prompt and rejects anything that fails the existing structured parser and intent policy. Deterministic fact extraction runs locally before the generative branch. Gemini embeddings use their own key and retain lexical retrieval as a fallback.
+
+When OpenRouter generation is unavailable, DocAgent labels the response as a local grounded fallback. It never sends provider error text or malformed model output to the answer body.
+
+OpenRouter's NVIDIA free-endpoint notice says not to submit confidential information or personal data because free-endpoint prompts may be logged and used to improve NVIDIA products. Use this configuration only for documents you are authorized to transmit under those terms.
 ## Example Questions
 
 After uploading, try:
