@@ -47,6 +47,58 @@ type PageTextResult = {
   source: 'native' | 'ocr' | 'failed' | 'skipped';
 };
 
+export type OcrProviderFailure = {
+  code:
+    | 'OCR_ACCESS_DENIED'
+    | 'OCR_INVALID_API_KEY'
+    | 'OCR_QUOTA_EXCEEDED'
+    | 'OCR_RATE_LIMITED'
+    | 'OCR_PROVIDER_UNAVAILABLE';
+  userMessage: string;
+};
+
+class OcrProviderError extends Error {
+  constructor(public readonly failure: OcrProviderFailure) {
+    super(failure.userMessage);
+    this.name = 'OcrProviderError';
+  }
+}
+
+export function classifyOcrProviderError(error: unknown): OcrProviderFailure {
+  const message = error instanceof Error ? error.message : String(error);
+  const normalized = message.toLowerCase();
+
+  if (normalized.includes('api key not valid') || normalized.includes('api_key_invalid')) {
+    return {
+      code: 'OCR_INVALID_API_KEY',
+      userMessage: 'Text recognition is unavailable because the configured Gemini API key is invalid.',
+    };
+  }
+  if (normalized.includes('403') || normalized.includes('denied access') || normalized.includes('permission_denied')) {
+    return {
+      code: 'OCR_ACCESS_DENIED',
+      userMessage:
+        'The image was uploaded, but text recognition is unavailable because the configured Gemini project was denied access.',
+    };
+  }
+  if (normalized.includes('quota') || normalized.includes('resource_exhausted')) {
+    return {
+      code: 'OCR_QUOTA_EXCEEDED',
+      userMessage: 'The image was uploaded, but the Gemini text-recognition quota has been exhausted.',
+    };
+  }
+  if (normalized.includes('429') || normalized.includes('rate limit')) {
+    return {
+      code: 'OCR_RATE_LIMITED',
+      userMessage: 'The image was uploaded, but text recognition is temporarily rate limited. Please retry shortly.',
+    };
+  }
+  return {
+    code: 'OCR_PROVIDER_UNAVAILABLE',
+    userMessage: 'The image was uploaded, but the Gemini text-recognition service is currently unavailable.',
+  };
+}
+
 const PAGE_NATIVE_MIN_CHARS = 40;
 
 const PRIMARY_OCR_PROMPT = `Extract ALL readable handwritten and printed text from this image exactly as it appears.
@@ -75,8 +127,10 @@ async function callGeminiOcr(
 ): Promise<string> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    console.log('[OCR] No GEMINI_API_KEY for OCR');
-    return '';
+    throw new OcrProviderError({
+      code: 'OCR_INVALID_API_KEY',
+      userMessage: 'Text recognition is unavailable because GEMINI_API_KEY is not configured.',
+    });
   }
 
   console.log(`[OCR] ${label} started`);
@@ -114,7 +168,8 @@ export async function ocrImage(imageBuffer: Buffer, mimeType: string = 'image/pn
     return '';
   } catch (err) {
     console.error('[OCR] Gemini OCR call failed:', err instanceof Error ? err.message : 'unknown');
-    return '';
+    if (err instanceof OcrProviderError) throw err;
+    throw new OcrProviderError(classifyOcrProviderError(err));
   }
 }
 
@@ -162,6 +217,7 @@ async function extractFromPDF(buffer: Buffer): Promise<{
   ocrUsed: boolean;
   pageStats: PageProcessingStats;
   pageBlocks: Array<{ page: number; text: string }>;
+  ocrFailure?: OcrProviderFailure;
 }> {
   const { extractText, getDocumentProxy } = await import('unpdf');
   const pdf = await getDocumentProxy(new Uint8Array(buffer));
@@ -169,6 +225,7 @@ async function extractFromPDF(buffer: Buffer): Promise<{
   console.log(`PDF: ${numPages} pages`);
 
   let pageTexts: string[] = [];
+  let ocrFailure: OcrProviderFailure | undefined;
   try {
     const extracted = await extractText(new Uint8Array(buffer), { mergePages: false });
     const extractedText = extracted.text as string | string[] | undefined;
@@ -253,6 +310,7 @@ async function extractFromPDF(buffer: Buffer): Promise<{
       }
     } catch (ocrError) {
       console.error('PDF OCR failed:', ocrError instanceof Error ? ocrError.message : 'unknown');
+      if (ocrError instanceof OcrProviderError) ocrFailure = ocrError.failure;
       ocrUsed = true;
       // Remaining pending pages stay as failed unless already skipped
       for (const pageNum of pagesNeedingOcr) {
@@ -271,7 +329,7 @@ async function extractFromPDF(buffer: Buffer): Promise<{
 
   const text = pageBlocks.map((b) => `\n--- Page ${b.page} ---\n${b.text}`).join('\n').trim();
 
-  return { text, pages: numPages, ocrUsed, pageStats, pageBlocks };
+  return { text, pages: numPages, ocrUsed, pageStats, pageBlocks, ocrFailure };
 }
 
 function htmlTableToMarkdown(html: string): string {
@@ -528,6 +586,7 @@ export async function processDocument(
     let pageStats: PageProcessingStats | undefined;
     let pageBlocks: PageBlock[] = [];
     let warnings: string[] = [];
+    let ocrFailure: OcrProviderFailure | undefined;
 
     if (type === 'pdf') {
       const pdf = await extractFromPDF(buffer);
@@ -537,6 +596,7 @@ export async function processDocument(
       pageStats = pdf.pageStats;
       pageBlocks = pdf.pageBlocks;
       warnings = [...pdf.pageStats.warnings];
+      ocrFailure = pdf.ocrFailure;
     } else if (type === 'docx') {
       const docx = await extractFromDOCX(buffer);
       text = docx.text;
@@ -568,8 +628,9 @@ export async function processDocument(
         contentType,
         ocrUsed,
         pages,
-        validation.reason || 'NO_READABLE_TEXT',
-        type === 'image' ? OCR_FAILED_USER_MESSAGE : 'No usable text could be extracted from this document.',
+        ocrFailure?.code || validation.reason || 'NO_READABLE_TEXT',
+        ocrFailure?.userMessage ||
+          (type === 'image' ? OCR_FAILED_USER_MESSAGE : 'No usable text could be extracted from this document.'),
         pageStats,
       );
     }
@@ -629,6 +690,30 @@ export async function processDocument(
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    if (err instanceof OcrProviderError) {
+      console.error(`[Extract] OCR provider failed (${err.failure.code})`);
+      return buildFailedDocument(
+        documentId,
+        fileName,
+        contentType,
+        true,
+        type === 'image' ? 1 : undefined,
+        err.failure.code,
+        err.failure.userMessage,
+        type === 'image'
+          ? {
+              totalPages: 1,
+              processedPages: 0,
+              nativeTextPages: 0,
+              ocrPages: 0,
+              ocrFailedPages: 1,
+              ocrSkippedPages: 0,
+              failedPages: 1,
+              warnings: [err.failure.userMessage],
+            }
+          : undefined,
+      );
+    }
     if (message === 'PASSWORD_PROTECTED' || isLikelyPasswordProtectedError(message)) {
       return buildFailedDocument(
         documentId,

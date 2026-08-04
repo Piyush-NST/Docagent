@@ -12,6 +12,11 @@ export type DocumentProcessingStatus =
 export type DocumentErrorCode =
   | 'NO_READABLE_TEXT'
   | 'OCR_ERROR_PHRASE'
+  | 'OCR_ACCESS_DENIED'
+  | 'OCR_INVALID_API_KEY'
+  | 'OCR_QUOTA_EXCEEDED'
+  | 'OCR_RATE_LIMITED'
+  | 'OCR_PROVIDER_UNAVAILABLE'
   | 'TOO_SHORT'
   | 'TOO_FEW_ALPHA_NUM'
   | 'MOSTLY_SYMBOLS'

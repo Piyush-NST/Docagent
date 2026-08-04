@@ -207,13 +207,18 @@ export default function DocumentUpload({ onDocumentUploaded }: DocumentUploadPro
           message: `"${file.name}" was already indexed in this workspace session.`,
         });
       } else if (status === 'ocr_failed' || status === 'failed' || status === 'needs_attention') {
+        const errorCode = String(data.processing?.errorCode || '');
+        const providerFailure = errorCode.startsWith('OCR_') && errorCode !== 'OCR_ERROR_PHRASE';
         showToast({
           type: 'error',
-          title: status === 'ocr_failed' ? 'OCR failed' : 'Needs attention',
+          title: providerFailure ? 'OCR service unavailable' : status === 'ocr_failed' ? 'OCR failed' : 'Needs attention',
           message:
             data.processing?.userMessage ||
             data.message ||
             'We could not reliably read text from this upload.',
+          details: providerFailure
+            ? 'Enable Gemini API access for the configured project, then retry. Searchable PDF and DOCX files do not require image OCR.'
+            : undefined,
         });
       } else if (status === 'limited') {
         showToast({
@@ -234,7 +239,12 @@ export default function DocumentUpload({ onDocumentUploaded }: DocumentUploadPro
           message: `"${file.name}" is indexed and ready to chat.`,
         });
       }
-      onDocumentUploaded(data);
+      try {
+        onDocumentUploaded(data);
+      } catch (callbackError) {
+        // The upload result is already known; a workspace refresh issue must not replace it.
+        console.error('Document refresh error:', callbackError);
+      }
     } catch (err) {
       console.error('Upload error:', err);
       const errorMsg = err instanceof Error ? `${err.name}: ${err.message}` : 'Upload failed';

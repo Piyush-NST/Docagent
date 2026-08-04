@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { isMeaningfulExtractedText } from '../src/lib/text-validation.ts';
 import { buildFailedOcrReadiness, buildReadyReadiness, isDocumentReady } from '../src/lib/document-status.ts';
+import { classifyOcrProviderError } from '../src/lib/document-processor.ts';
 
 describe('isMeaningfulExtractedText', () => {
   it('accepts clear printed English text', () => {
@@ -69,6 +70,25 @@ describe('isMeaningfulExtractedText', () => {
 });
 
 describe('failed OCR indexing guards', () => {
+  it('classifies denied Gemini access without blaming the uploaded file', () => {
+    const failure = classifyOcrProviderError(
+      new Error('[403 Forbidden] Your project has been denied access.'),
+    );
+    assert.equal(failure.code, 'OCR_ACCESS_DENIED');
+    assert.match(failure.userMessage, /project was denied access/i);
+  });
+
+  it('preserves the OCR provider failure in readiness output', () => {
+    const readiness = buildFailedOcrReadiness({
+      fileSize: 12000,
+      ocrUsed: true,
+      errorCode: 'OCR_ACCESS_DENIED',
+      userMessage: 'Gemini project denied access.',
+    });
+    assert.equal(readiness.errorCode, 'OCR_ACCESS_DENIED');
+    assert.equal(readiness.userMessage, 'Gemini project denied access.');
+  });
+
   it('does not create chunks from OCR failure text', () => {
     const validation = isMeaningfulExtractedText('Could not extract text from image');
     assert.equal(validation.ok, false);
