@@ -6,7 +6,7 @@ A premium document intelligence app for uploading files and asking grounded ques
 
 ## Features
 
-- Upload PDF, DOCX, and image files (PNG, JPG)
+- Upload PDF, DOCX, and image files (PNG, JPG) up to 20MB
 - Ask questions about uploaded documents
 - AI answers grounded in document content only
 - Page/section citations on replies
@@ -21,14 +21,14 @@ A premium document intelligence app for uploading files and asking grounded ques
 - **Backend**: Next.js API Routes
 - **AI/LLM**: OpenRouter (`nvidia/nemotron-3-ultra-550b-a55b:free`)
 - **OCR**: pinned NVIDIA Vision model through OpenRouter — image/scanned text extraction
-- **Storage**: In-memory (Azure Blob optional)
+- **Storage**: Postgres for indexes, private Vercel Blob for large original files (Azure Blob optional)
 - **Text Extraction**: `unpdf` for PDFs, `mammoth` for DOCX
 
 ## Getting Started
 
 ### Prerequisites
 
-- Node.js 18+
+- Node.js 20+
 - OpenRouter API key (from https://openrouter.ai/settings/keys)
 - Gemini API key for optional semantic embeddings (from https://aistudio.google.com/app/apikey)
 
@@ -51,14 +51,17 @@ GEMINI_API_KEY=your_gemini_key
 OPENROUTER_OCR_MODEL=nvidia/nemotron-nano-12b-v2-vl:free
 GEMINI_EMBEDDING_MODEL=gemini-embedding-001
 DATABASE_URL=your_postgres_connection_string
+BLOB_READ_WRITE_TOKEN=your_private_vercel_blob_token
 ```
 
 On Vercel, connect a Neon/Postgres integration and expose either `DATABASE_URL`
 or `POSTGRES_URL` to the Production environment. Durable database storage is
-required for document metadata and chunks. Configure Azure Blob storage when
-original-file persistence and cross-instance OCR retries are required; without
-it, Vercel keeps original binaries only in transient `/tmp` storage while the
-initial upload is processed.
+required for document metadata and chunks. To accept files above 4MB, create a
+private Vercel Blob store and connect it to the project so Vercel supplies
+`BLOB_READ_WRITE_TOKEN`, then redeploy Production. The browser uploads those
+files directly to Blob and DocAgent keeps the app-level processing limit at
+20MB. Smaller files continue through the existing upload route. Azure Blob
+remains available for the legacy original-file path.
 
 Then start:
 
@@ -72,7 +75,9 @@ Open http://localhost:3000
 
 ### 1. Upload
 
-Upload a document. It is stored and assigned a unique ID.
+Upload a document up to 20MB. Files above 4MB use a private direct-to-Blob path
+to stay within the serverless request-body limit, then enter the same extraction
+and indexing pipeline.
 
 ### 2. Text Extraction
 
@@ -128,6 +133,7 @@ docagent-ai-rag-system/
 
 - Local default: durable JSON under `.data/`
 - Production on Vercel: set `DATABASE_URL` (Postgres / Neon). Schema auto-applies on first use (`db/migrations/001_init.sql`).
+- Production uploads above 4MB: connect a private Vercel Blob store so `BLOB_READ_WRITE_TOKEN` is available.
 - Without `DATABASE_URL` on Vercel, upload/chat return `503 PERSISTENCE_UNAVAILABLE` (no silent in-memory fallback).
 
 ## AI provider

@@ -1,7 +1,8 @@
 // upload api
 
 import { NextRequest, NextResponse } from 'next/server';
-import { uploadDocument, ensureContainerExists } from '@/lib/azure-blob';
+import { v4 as uuidv4 } from 'uuid';
+import { uploadDocument, ensureContainerExists, type DocumentMetadata } from '@/lib/azure-blob';
 import { processDocument } from '@/lib/document-processor';
 import { storeDocumentChunks } from '@/lib/vector-store';
 import { findDocumentByHash, toPersistedDocument, upsertDocumentRecord } from '@/lib/document-registry';
@@ -21,6 +22,9 @@ import {
 } from '@/lib/upload-limits';
 import { isPersistenceError } from '@/lib/store';
 import { INDEX_VERSION, isCurrentIndexVersion } from '@/lib/config/indexing';
+import { deleteVercelBlob, downloadVercelBlob, isVercelBlobUrl } from '@/lib/vercel-blob';
+
+export const maxDuration = 300;
 
 const STORAGE_TIMEOUT_MS = 20_000;
 const RECEIVE_FILE_TIMEOUT_MS = 45_000;
@@ -73,37 +77,85 @@ function toProcessingPayload(readiness: ReturnType<typeof buildReadyReadiness>) 
 
 export async function POST(request: NextRequest) {
   try {
-    await withTimeout(
-      ensureContainerExists(),
-      STORAGE_TIMEOUT_MS,
-      'Preparing document storage took too long. Please try again.',
-    );
+    const requestType = request.headers.get('content-type') || '';
+    let buffer: Buffer;
+    let fileName: string;
+    let fileType: string;
+    let directMetadata: DocumentMetadata | undefined;
+    let sourceBlobUrl: string | undefined;
+    let sourceBlobAccess: 'private' | 'public' | undefined;
 
-    const contentLength = Number(request.headers.get('content-length') || 0);
-    if (contentLength > REQUEST_BODY_HARD_LIMIT_BYTES) {
-      return NextResponse.json(
-        {
-          error: 'FILE_TOO_LARGE',
-          message: `This upload is above the ${MAX_UPLOAD_LABEL} document processing limit.`,
-          maxSize: MAX_UPLOAD_LABEL,
-          maxBytes: MAX_UPLOAD_BYTES,
-        },
-        { status: 413 },
+    if (requestType.includes('application/json')) {
+      const body = (await request.json()) as {
+        blobUrl?: string;
+        fileName?: string;
+        fileType?: string;
+        fileSize?: number;
+        blobAccess?: 'private' | 'public';
+      };
+
+      if (!body.blobUrl || !isVercelBlobUrl(body.blobUrl) || !body.fileName) {
+        return NextResponse.json(
+          { error: 'INVALID_BLOB_UPLOAD', message: 'The uploaded document reference is invalid.' },
+          { status: 400 },
+        );
+      }
+
+      const downloaded = await withTimeout(
+        downloadVercelBlob(body.blobUrl, 'private'),
+        RECEIVE_FILE_TIMEOUT_MS,
+        'Receiving the uploaded file took too long. Please try a smaller file or selected pages.',
       );
+      if (!downloaded) {
+        return NextResponse.json(
+          { error: 'BLOB_DOWNLOAD_FAILED', message: 'The uploaded document could not be retrieved.' },
+          { status: 400 },
+        );
+      }
+      buffer = downloaded.data;
+      fileName = body.fileName;
+      fileType = downloaded.contentType || body.fileType || 'application/octet-stream';
+      sourceBlobUrl = body.blobUrl;
+      sourceBlobAccess = 'private';
+      directMetadata = {
+        documentId: uuidv4(),
+        fileName,
+        fileType,
+        fileSize: buffer.length,
+        uploadedAt: new Date().toISOString(),
+        blobUrl: body.blobUrl,
+      };
+    } else {
+      const contentLength = Number(request.headers.get('content-length') || 0);
+      if (contentLength > REQUEST_BODY_HARD_LIMIT_BYTES) {
+        return NextResponse.json(
+          {
+            error: 'DIRECT_UPLOAD_REQUIRED',
+            message: `Files above ${formatBytes(REQUEST_BODY_HARD_LIMIT_BYTES)} must use secure direct upload.`,
+            maxSize: MAX_UPLOAD_LABEL,
+            maxBytes: MAX_UPLOAD_BYTES,
+          },
+          { status: 413 },
+        );
+      }
+
+      const formData = await withTimeout(
+        request.formData(),
+        RECEIVE_FILE_TIMEOUT_MS,
+        'Receiving the uploaded file took too long. Please try a smaller file or selected pages.',
+      );
+      const file = formData.get('file') as File | null;
+
+      if (!file) {
+        return NextResponse.json({ error: 'No file uploaded', message: 'No file uploaded.' }, { status: 400 });
+      }
+
+      fileName = file.name;
+      fileType = file.type;
+      buffer = Buffer.from(await file.arrayBuffer());
     }
 
-    const formData = await withTimeout(
-      request.formData(),
-      RECEIVE_FILE_TIMEOUT_MS,
-      'Receiving the uploaded file took too long. Please try a smaller file or selected pages.',
-    );
-    const file = formData.get('file') as File | null;
-
-    if (!file) {
-      return NextResponse.json({ error: 'No file uploaded', message: 'No file uploaded.' }, { status: 400 });
-    }
-
-    const validationError = validateUploadFile({ name: file.name, type: file.type, size: file.size });
+    const validationError = validateUploadFile({ name: fileName, type: fileType, size: buffer.length });
     if (validationError) {
       const status = validationError.code === 'FILE_TOO_LARGE' ? 413 : 400;
       return NextResponse.json(
@@ -112,19 +164,18 @@ export async function POST(request: NextRequest) {
           message: validationError.message,
           maxSize: MAX_UPLOAD_LABEL,
           maxBytes: MAX_UPLOAD_BYTES,
-          actualSize: file.size,
-          actualSizeLabel: formatBytes(file.size),
+          actualSize: buffer.length,
+          actualSizeLabel: formatBytes(buffer.length),
         },
         { status },
       );
     }
 
-    const arrayBuffer = await file.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
     const contentHash = hashFileBuffer(buffer);
 
     const existing = await findDocumentByHash(contentHash);
     if (existing && isDocumentQueryable(existing.status) && !isCurrentIndexVersion(existing.indexVersion)) {
+      if (sourceBlobUrl) await deleteVercelBlob(sourceBlobUrl).catch(() => undefined);
       return NextResponse.json(
         {
           error: 'INDEX_OUTDATED',
@@ -138,6 +189,7 @@ export async function POST(request: NextRequest) {
     }
 
     if (existing && isDocumentQueryable(existing.status)) {
+      if (sourceBlobUrl) await deleteVercelBlob(sourceBlobUrl).catch(() => undefined);
       return NextResponse.json({
         success: true,
         duplicate: true,
@@ -152,16 +204,24 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    console.log('Uploading to blob storage...');
-    const metadata = await withTimeout(
-      uploadDocument(buffer, file.name, file.type),
-      STORAGE_TIMEOUT_MS,
-      'Saving the uploaded file took too long. Please try again with a smaller file.',
-    );
+    let metadata = directMetadata;
+    if (!metadata) {
+      await withTimeout(
+        ensureContainerExists(),
+        STORAGE_TIMEOUT_MS,
+        'Preparing document storage took too long. Please try again.',
+      );
+      console.log('Uploading to document storage...');
+      metadata = await withTimeout(
+        uploadDocument(buffer, fileName, fileType),
+        STORAGE_TIMEOUT_MS,
+        'Saving the uploaded file took too long. Please try again with a smaller file.',
+      );
+    }
 
     console.log('Processing document...');
     const processedDoc = await withTimeout(
-      processDocument(metadata.documentId, buffer, file.name, file.type),
+      processDocument(metadata.documentId, buffer, fileName, fileType),
       DOCUMENT_PROCESSING_TIMEOUT_MS,
       'Reading this document took too long. Try compressing it, splitting it, or uploading selected pages.',
     );
@@ -184,6 +244,8 @@ export async function POST(request: NextRequest) {
           fileType: metadata.fileType,
           fileSize: metadata.fileSize,
           uploadedAt: metadata.uploadedAt,
+          blobUrl: sourceBlobUrl,
+          blobAccess: sourceBlobAccess,
           status: indexingReadiness.status,
           readiness: indexingReadiness,
         }),
@@ -237,6 +299,8 @@ export async function POST(request: NextRequest) {
         fileSize: metadata.fileSize,
         uploadedAt: metadata.uploadedAt,
         contentHash,
+        blobUrl: sourceBlobUrl,
+        blobAccess: sourceBlobAccess,
         status: readiness.status,
         readiness,
       }),

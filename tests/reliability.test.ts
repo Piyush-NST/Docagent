@@ -16,6 +16,12 @@ import { MemoryStore } from '../src/lib/store/memory-store';
 import { resetStoreForTests } from '../src/lib/store';
 import { searchDocument } from '../src/lib/vector-store';
 import { resolvePostgresUrl } from '../src/lib/config/database';
+import {
+  DIRECT_UPLOAD_THRESHOLD_BYTES,
+  MAX_UPLOAD_BYTES,
+  MAX_UPLOAD_LABEL,
+} from '../src/lib/upload-limits';
+import { isVercelBlobUrl } from '../src/lib/vercel-blob';
 
 describe('production database configuration', () => {
   it('accepts standard Neon and Vercel Postgres environment names', () => {
@@ -80,6 +86,26 @@ describe('file validation', () => {
 
   it('accepts pdf by extension even if mime is blank', () => {
     assert.equal(validateUploadFile({ name: 'report.pdf', type: '', size: 1200 }), null);
+  });
+
+  it('accepts documents through 20MB and rejects anything larger', () => {
+    assert.equal(MAX_UPLOAD_LABEL, '20MB');
+    assert.equal(MAX_UPLOAD_BYTES, 20 * 1024 * 1024);
+    assert.equal(DIRECT_UPLOAD_THRESHOLD_BYTES, 4 * 1024 * 1024);
+    assert.equal(
+      validateUploadFile({ name: 'large.pdf', type: 'application/pdf', size: MAX_UPLOAD_BYTES }),
+      null,
+    );
+    assert.equal(
+      validateUploadFile({ name: 'too-large.pdf', type: 'application/pdf', size: MAX_UPLOAD_BYTES + 1 })?.code,
+      'FILE_TOO_LARGE',
+    );
+  });
+
+  it('only accepts HTTPS Vercel Blob document references', () => {
+    assert.equal(isVercelBlobUrl('https://example.public.blob.vercel-storage.com/documents/file.pdf'), true);
+    assert.equal(isVercelBlobUrl('http://example.public.blob.vercel-storage.com/documents/file.pdf'), false);
+    assert.equal(isVercelBlobUrl('https://example.com/documents/file.pdf'), false);
   });
 });
 

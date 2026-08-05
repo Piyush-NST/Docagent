@@ -6,6 +6,8 @@ export interface PersistedDocument {
   fileType: string;
   fileSize: number;
   contentHash?: string;
+  blobUrl?: string;
+  blobAccess?: 'private' | 'public';
   uploadedAt: string;
   status: DocumentProcessingStatus;
   readiness: DocumentReadinessPayload;

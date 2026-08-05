@@ -2,11 +2,13 @@
 
 import React, { useCallback, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
+import { upload as uploadToBlob } from '@vercel/blob/client';
 import DocumentAnalysisLoader, { AnalysisStep } from './DocumentAnalysisLoader';
 import UploadToastNotice from './UploadToastNotice';
 import {
   MAX_UPLOAD_BYTES,
   MAX_UPLOAD_LABEL,
+  DIRECT_UPLOAD_THRESHOLD_BYTES,
   SUPPORTED_UPLOAD_LABEL,
   buildOversizedFileMessage,
   formatBytes,
@@ -61,7 +63,7 @@ const uploadAnalysisSteps: AnalysisStep[] = [
   { label: 'Creating embeddings', detail: 'Indexing content for grounded retrieval.' },
 ];
 
-const UPLOAD_TIMEOUT_MS = 120_000;
+const UPLOAD_TIMEOUT_MS = 240_000;
 const MIN_ANALYSIS_DELAY_MS = 4_400;
 
 function wait(ms: number) {
@@ -87,6 +89,11 @@ function getUserFriendlyError(error: string): UploadToast {
     'took too long': 'Upload timed out. Please try again with a smaller file or fewer pages.',
     PERSISTENCE_UNAVAILABLE:
       'Document storage is not configured for this deployment. Connect a Postgres database and redeploy DocAgent.',
+    BLOB_STORAGE_UNAVAILABLE:
+      'Large-file storage is not configured for this deployment. Connect a private Vercel Blob store and redeploy DocAgent.',
+    BLOB_UPLOAD_FAILED: 'The large file could not be stored securely. Please try again.',
+    'client token':
+      'Large-file storage is not configured for this deployment. Connect a private Vercel Blob store and redeploy DocAgent.',
     'Persistent storage is required':
       'Document storage is not configured for this deployment. Connect a Postgres database and redeploy DocAgent.',
     'No Postgres connection':
@@ -103,7 +110,9 @@ function getUserFriendlyError(error: string): UploadToast {
       const storageConfigurationError =
         key === 'PERSISTENCE_UNAVAILABLE' ||
         key === 'Persistent storage is required' ||
-        key === 'No Postgres connection';
+        key === 'No Postgres connection' ||
+        key === 'BLOB_STORAGE_UNAVAILABLE' ||
+        key === 'client token';
       return {
         type: 'error',
         title: storageConfigurationError
@@ -113,7 +122,9 @@ function getUserFriendlyError(error: string): UploadToast {
             : 'Upload failed',
         message,
         details: storageConfigurationError
-          ? 'Set DATABASE_URL or POSTGRES_URL in the Vercel project environment for Production.'
+          ? key === 'BLOB_STORAGE_UNAVAILABLE' || key === 'client token'
+            ? 'Create a private Vercel Blob store, connect it to this project, and redeploy Production.'
+            : 'Set DATABASE_URL or POSTGRES_URL in the Vercel project environment for Production.'
           : key.toLowerCase().includes('large') || key === 'FILE_TOO_LARGE'
             ? undefined
             : `Supported uploads: ${SUPPORTED_UPLOAD_LABEL}, up to ${MAX_UPLOAD_LABEL}.`,
@@ -180,14 +191,37 @@ export default function DocumentUpload({ onDocumentUploaded }: DocumentUploadPro
     const uploadTimeout = window.setTimeout(() => controller.abort(), UPLOAD_TIMEOUT_MS);
 
     try {
-      const formData = new FormData();
-      formData.append('file', file);
+      let res: Response;
+      if (file.size > DIRECT_UPLOAD_THRESHOLD_BYTES) {
+        const safeName = file.name.replace(/[^a-zA-Z0-9._-]+/g, '-');
+        const blob = await uploadToBlob(`documents/${crypto.randomUUID()}-${safeName}`, file, {
+          access: 'private',
+          handleUploadUrl: '/api/blob-upload',
+          multipart: true,
+          abortSignal: controller.signal,
+        });
 
-      const res = await fetch('/api/upload', {
-        method: 'POST',
-        body: formData,
-        signal: controller.signal,
-      });
+        res = await fetch('/api/upload', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            blobUrl: blob.url,
+            fileName: file.name,
+            fileType: file.type,
+            fileSize: file.size,
+            blobAccess: 'private',
+          }),
+          signal: controller.signal,
+        });
+      } else {
+        const formData = new FormData();
+        formData.append('file', file);
+        res = await fetch('/api/upload', {
+          method: 'POST',
+          body: formData,
+          signal: controller.signal,
+        });
+      }
 
       const responseType = res.headers.get('content-type') || '';
       const data = responseType.includes('application/json')

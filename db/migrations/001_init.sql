@@ -7,6 +7,8 @@ CREATE TABLE IF NOT EXISTS documents (
   file_type TEXT NOT NULL,
   file_size INTEGER NOT NULL,
   content_hash TEXT,
+  blob_url TEXT,
+  blob_access TEXT,
   uploaded_at TIMESTAMPTZ NOT NULL,
   status TEXT NOT NULL,
   pages INTEGER,

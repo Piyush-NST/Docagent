@@ -10,6 +10,8 @@ CREATE TABLE IF NOT EXISTS documents (
   file_type TEXT NOT NULL,
   file_size INTEGER NOT NULL,
   content_hash TEXT,
+  blob_url TEXT,
+  blob_access TEXT,
   uploaded_at TIMESTAMPTZ NOT NULL,
   status TEXT NOT NULL,
   pages INTEGER,
@@ -26,6 +28,8 @@ CREATE TABLE IF NOT EXISTS documents (
 );
 
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS index_version INTEGER;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS blob_url TEXT;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS blob_access TEXT;
 
 CREATE UNIQUE INDEX IF NOT EXISTS documents_content_hash_uidx
   ON documents (content_hash)
@@ -93,6 +97,11 @@ function rowToDocument(row: Record<string, unknown>): PersistedDocument {
     fileType: String(row.file_type),
     fileSize: Number(row.file_size),
     contentHash: row.content_hash ? String(row.content_hash) : undefined,
+    blobUrl: row.blob_url ? String(row.blob_url) : undefined,
+    blobAccess:
+      row.blob_access === 'private' || row.blob_access === 'public'
+        ? row.blob_access
+        : undefined,
     uploadedAt: new Date(String(row.uploaded_at)).toISOString(),
     status: row.status as PersistedDocument['status'],
     readiness: row.readiness as PersistedDocument['readiness'],
@@ -139,11 +148,12 @@ export class PostgresStore implements DocAgentStore {
     const sql = await this.db();
     await sql`
       INSERT INTO documents (
-        document_id, file_name, file_type, file_size, content_hash, uploaded_at, status,
+        document_id, file_name, file_type, file_size, content_hash, blob_url, blob_access, uploaded_at, status,
         pages, processed_pages, native_text_pages, ocr_pages, ocr_failed_pages, ocr_skipped_pages,
         chunk_count, readiness, warnings, index_version
       ) VALUES (
         ${doc.documentId}, ${doc.fileName}, ${doc.fileType}, ${doc.fileSize}, ${doc.contentHash || null},
+        ${doc.blobUrl || null}, ${doc.blobAccess || null},
         ${doc.uploadedAt}, ${doc.status}, ${doc.pages ?? null}, ${doc.processedPages ?? null},
         ${doc.nativeTextPages ?? null}, ${doc.ocrPages ?? null}, ${doc.ocrFailedPages ?? null},
         ${doc.ocrSkippedPages ?? null}, ${doc.chunkCount}, ${sql.json(doc.readiness as never)},
@@ -154,6 +164,8 @@ export class PostgresStore implements DocAgentStore {
         file_type = EXCLUDED.file_type,
         file_size = EXCLUDED.file_size,
         content_hash = EXCLUDED.content_hash,
+        blob_url = EXCLUDED.blob_url,
+        blob_access = EXCLUDED.blob_access,
         uploaded_at = EXCLUDED.uploaded_at,
         status = EXCLUDED.status,
         pages = EXCLUDED.pages,

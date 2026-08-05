@@ -43,6 +43,8 @@ describe('persistent store (memory backend simulation)', () => {
       fileType: 'application/pdf',
       fileSize: 100,
       contentHash: 'abc',
+      blobUrl: 'https://example.private.blob.vercel-storage.com/documents/a.pdf',
+      blobAccess: 'private',
       uploadedAt: new Date().toISOString(),
       status: readiness.status,
       readiness,
@@ -57,6 +59,8 @@ describe('persistent store (memory backend simulation)', () => {
     assert.ok(found);
     assert.equal(found.fileName, 'a.pdf');
     assert.equal(found.contentHash, 'abc');
+    assert.equal(found.blobUrl, 'https://example.private.blob.vercel-storage.com/documents/a.pdf');
+    assert.equal(found.blobAccess, 'private');
 
     const byHash = await other.findDocumentByHash('abc');
     assert.equal(byHash?.documentId, 'doc-1');

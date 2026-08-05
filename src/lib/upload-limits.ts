@@ -1,6 +1,7 @@
-export const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
-export const REQUEST_BODY_HARD_LIMIT_BYTES = MAX_UPLOAD_BYTES + 1024 * 1024;
-export const MAX_UPLOAD_LABEL = '8MB';
+export const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
+export const DIRECT_UPLOAD_THRESHOLD_BYTES = 4 * 1024 * 1024;
+export const REQUEST_BODY_HARD_LIMIT_BYTES = DIRECT_UPLOAD_THRESHOLD_BYTES + 512 * 1024;
+export const MAX_UPLOAD_LABEL = '20MB';
 
 export const SUPPORTED_UPLOAD_TYPES = [
   'application/pdf',

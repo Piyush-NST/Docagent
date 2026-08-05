@@ -41,6 +41,8 @@ export function toPersistedDocument(args: {
   fileSize: number;
   uploadedAt: string;
   contentHash?: string;
+  blobUrl?: string;
+  blobAccess?: 'private' | 'public';
   status: DocumentProcessingStatus;
   readiness: DocumentReadinessPayload;
 }): DocumentRecord {
@@ -51,6 +53,8 @@ export function toPersistedDocument(args: {
     fileType: args.fileType,
     fileSize: args.fileSize,
     contentHash: args.contentHash,
+    blobUrl: args.blobUrl,
+    blobAccess: args.blobAccess,
     uploadedAt: args.uploadedAt,
     status: args.status,
     readiness: args.readiness,

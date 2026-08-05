@@ -19,6 +19,7 @@ import { processDocument } from '@/lib/document-processor';
 import { buildFailedOcrReadiness, buildReadyReadiness, isDocumentQueryable } from '@/lib/document-status';
 import { isPersistenceError } from '@/lib/store';
 import { INDEX_VERSION, isCurrentIndexVersion } from '@/lib/config/indexing';
+import { deleteVercelBlob, downloadVercelBlob } from '@/lib/vercel-blob';
 
 const retryLocks = new Set<string>();
 
@@ -152,14 +153,18 @@ export async function DELETE(request: NextRequest) {
     }
 
     console.log(`Deleted doc ${documentId}`);
+    const existing = await getDocumentRecord(documentId);
     const deletedStore = await deleteDocumentFromStore(documentId);
-    const deletedBlob = await deleteDocument(documentId);
+    const deletedLegacyBlob = await deleteDocument(documentId);
+    const deletedVercelBlob = existing?.blobUrl
+      ? await deleteVercelBlob(existing.blobUrl).catch(() => false)
+      : false;
 
     return NextResponse.json({
       success: true,
       documentId,
       deletedFromStore: deletedStore,
-      deletedFromBlob: deletedBlob,
+      deletedFromBlob: deletedLegacyBlob || deletedVercelBlob,
     });
   } catch (error) {
     console.error('Delete doc error:', error);
@@ -194,7 +199,23 @@ export async function POST(request: NextRequest) {
     console.log('[OCR] Retry OCR requested');
 
     try {
-      const stored = await downloadDocument(documentId);
+      const existing = await getDocumentRecord(documentId);
+      const directBlob = existing?.blobUrl
+        ? await downloadVercelBlob(existing.blobUrl, existing.blobAccess || 'private')
+        : null;
+      const stored = directBlob && existing
+        ? {
+            data: directBlob.data,
+            metadata: {
+              documentId,
+              fileName: existing.fileName,
+              fileType: directBlob.contentType || existing.fileType,
+              fileSize: directBlob.size,
+              uploadedAt: existing.uploadedAt,
+              blobUrl: existing.blobUrl || '',
+            },
+          }
+        : await downloadDocument(documentId);
       if (!stored) {
         return NextResponse.json({ error: 'Document not found' }, { status: 404 });
       }
@@ -242,7 +263,6 @@ export async function POST(request: NextRequest) {
         readiness.indexStatus = 'Limited';
       }
 
-      const existing = await getDocumentRecord(documentId);
       await upsertDocumentRecord(
         toPersistedDocument({
           documentId,
@@ -251,6 +271,8 @@ export async function POST(request: NextRequest) {
           fileSize: stored.metadata.fileSize,
           uploadedAt: existing?.uploadedAt || stored.metadata.uploadedAt,
           contentHash: existing?.contentHash,
+          blobUrl: existing?.blobUrl,
+          blobAccess: existing?.blobAccess,
           status: readiness.status,
           readiness,
         }),
