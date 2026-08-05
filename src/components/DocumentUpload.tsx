@@ -5,6 +5,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { upload as uploadToBlob } from '@vercel/blob/client';
 import DocumentAnalysisLoader, { AnalysisStep } from './DocumentAnalysisLoader';
 import UploadToastNotice from './UploadToastNotice';
+import UploadSupportNotice from './UploadSupportNotice';
 import {
   MAX_UPLOAD_BYTES,
   MAX_UPLOAD_LABEL,
@@ -65,6 +66,7 @@ const uploadAnalysisSteps: AnalysisStep[] = [
 
 const UPLOAD_TIMEOUT_MS = 240_000;
 const MIN_ANALYSIS_DELAY_MS = 4_400;
+const DISPLAY_UPLOAD_LIMIT = MAX_UPLOAD_LABEL.replace(/(\d)([A-Z])/, '$1 $2');
 
 function wait(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -147,6 +149,8 @@ export default function DocumentUpload({ onDocumentUploaded }: DocumentUploadPro
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [previewName, setPreviewName] = useState<string | null>(null);
+  const [previewIsImage, setPreviewIsImage] = useState(false);
+  const [oversizedFile, setOversizedFile] = useState<{ name: string; size: number } | null>(null);
   const [toast, setToast] = useState<UploadToast | null>(null);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
 
@@ -171,17 +175,15 @@ export default function DocumentUpload({ onDocumentUploaded }: DocumentUploadPro
 
   const uploadFile = async (file: File) => {
     if (file.size > MAX_UPLOAD_BYTES) {
-      showToast({
-        type: 'error',
-        title: 'File limit reached',
-        message: buildOversizedFileMessage(file.name, file.size),
-        fileSizeLabel: formatBytes(file.size),
-        limitLabel: MAX_UPLOAD_LABEL,
-      });
+      setToast(null);
+      setOversizedFile({ name: file.name, size: file.size });
+      if (fileInputRef.current) fileInputRef.current.value = '';
       return;
     }
 
+    setOversizedFile(null);
     setPreviewName(file.name);
+    setPreviewIsImage(file.type.startsWith('image/') || /\.(png|jpe?g)$/i.test(file.name));
     setIsUploading(true);
     setToast(null);
     setAnalysisError(null);
@@ -310,6 +312,7 @@ export default function DocumentUpload({ onDocumentUploaded }: DocumentUploadPro
       if (fileInputRef.current) fileInputRef.current.value = '';
       setIsUploading(false);
       setPreviewName(null);
+      setPreviewIsImage(false);
     }
   };
 
@@ -357,6 +360,8 @@ export default function DocumentUpload({ onDocumentUploaded }: DocumentUploadPro
         <p>Drop a file into the assistant workspace.</p>
       </div>
 
+      <UploadSupportNotice />
+
       <motion.div
         className={`upload-zone-premium ${isDragging ? 'dragover' : ''} ${isUploading ? 'uploading' : ''}`}
         onDragOver={handleDragOver}
@@ -402,6 +407,12 @@ export default function DocumentUpload({ onDocumentUploaded }: DocumentUploadPro
                 status={analysisError ? 'failed' : undefined}
                 error={analysisError}
               />
+              {previewIsImage ? (
+                <p className="upload-file-context">
+                  <span aria-hidden="true">i</span>
+                  Image quality affects extraction accuracy. Clear, well-lit scans work best.
+                </p>
+              ) : null}
             </motion.div>
           ) : (
             <motion.div
@@ -434,6 +445,26 @@ export default function DocumentUpload({ onDocumentUploaded }: DocumentUploadPro
           )}
         </AnimatePresence>
       </motion.div>
+
+      <AnimatePresence initial={false}>
+        {oversizedFile ? (
+          <motion.div
+            className="upload-inline-error"
+            role="alert"
+            initial={{ height: 0, opacity: 0, y: -4 }}
+            animate={{ height: 'auto', opacity: 1, y: 0 }}
+            exit={{ height: 0, opacity: 0, y: -4 }}
+            transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+          >
+            <span className="upload-inline-error-icon" aria-hidden="true">!</span>
+            <div>
+              <strong>File exceeds the current upload limit.</strong>
+              <p>Support for files over {DISPLAY_UPLOAD_LIMIT} is coming soon.</p>
+              <span>{oversizedFile.name} · {formatBytes(oversizedFile.size)}</span>
+            </div>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
     </motion.section>
   );
 }
