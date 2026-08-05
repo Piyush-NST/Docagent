@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 import { isMeaningfulExtractedText } from '../src/lib/text-validation';
 import {
   buildFailedOcrReadiness,
+  buildIndexingReadiness,
   buildReadyReadiness,
   computeReadinessCoverage,
   isDocumentQueryable,
@@ -31,6 +32,22 @@ describe('production database configuration', () => {
       resolvePostgresUrl({ DATABASE_URL: 'postgres://primary', POSTGRES_URL: 'postgres://fallback' }),
       'postgres://primary',
     );
+  });
+});
+
+describe('parent-first document indexing', () => {
+  it('creates a non-queryable parent readiness record before chunks are persisted', () => {
+    const readiness = buildIndexingReadiness({
+      fileSize: 2048,
+      textLength: 480,
+      ocrUsed: false,
+    });
+
+    assert.equal(readiness.status, 'processing');
+    assert.equal(readiness.chunksCreated, 0);
+    assert.equal(readiness.embeddingsCreated, 0);
+    assert.equal(readiness.grounded, false);
+    assert.equal(isDocumentQueryable(readiness.status), false);
   });
 });
 

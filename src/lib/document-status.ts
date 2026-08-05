@@ -170,6 +170,32 @@ export function buildFailedOcrReadiness(args: {
   };
 }
 
+export function buildIndexingReadiness(args: {
+  fileSize: number;
+  textLength: number;
+  ocrUsed: boolean;
+  pages?: number;
+  pageStats?: PageProcessingStats;
+}): DocumentReadinessPayload {
+  return {
+    status: 'processing',
+    extractedTextLength: args.textLength,
+    chunksCreated: 0,
+    embeddingsCreated: 0,
+    ocrUsed: args.ocrUsed,
+    grounded: false,
+    pages: args.pages,
+    fileSize: args.fileSize,
+    indexStatus: 'Needs Attention',
+    retrievalStatus: 'Failed',
+    readinessCoverage: 0,
+    pageCoveragePercent: computePageCoveragePercent(args.pageStats),
+    pageStats: args.pageStats,
+    userMessage: 'Document indexing is in progress.',
+    warnings: args.pageStats?.warnings,
+  };
+}
+
 export function buildReadyReadiness(args: {
   fileSize: number;
   textLength: number;

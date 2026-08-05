@@ -7,6 +7,7 @@ import { storeDocumentChunks } from '@/lib/vector-store';
 import { findDocumentByHash, toPersistedDocument, upsertDocumentRecord } from '@/lib/document-registry';
 import {
   buildFailedOcrReadiness,
+  buildIndexingReadiness,
   buildReadyReadiness,
   isDocumentQueryable,
 } from '@/lib/document-status';
@@ -168,6 +169,26 @@ export async function POST(request: NextRequest) {
     let embeddingsCreated = 0;
 
     if (isDocumentQueryable(processedDoc.status) && processedDoc.chunks.length > 0) {
+      // PostgreSQL chunks reference documents, so persist the parent before indexing.
+      const indexingReadiness = buildIndexingReadiness({
+        fileSize: metadata.fileSize,
+        textLength: processedDoc.rawText.length,
+        ocrUsed: processedDoc.ocrUsed,
+        pages: processedDoc.pages,
+        pageStats: processedDoc.pageStats,
+      });
+      await upsertDocumentRecord(
+        toPersistedDocument({
+          documentId: metadata.documentId,
+          fileName: metadata.fileName,
+          fileType: metadata.fileType,
+          fileSize: metadata.fileSize,
+          uploadedAt: metadata.uploadedAt,
+          status: indexingReadiness.status,
+          readiness: indexingReadiness,
+        }),
+      );
+
       console.log('Generating embeddings...');
       const indexed = await withTimeout(
         storeDocumentChunks(metadata.documentId, processedDoc.chunks),
