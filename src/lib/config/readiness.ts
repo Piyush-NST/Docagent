@@ -20,4 +20,5 @@ export const MAX_OCR_PAGES = Number(process.env.DOCAGENT_MAX_OCR_PAGES || 10);
 
 export const EMBEDDING_MODEL = process.env.GEMINI_EMBEDDING_MODEL || 'gemini-embedding-001';
 export const OPENROUTER_ANSWER_MODEL = process.env.OPENROUTER_MODEL || 'nvidia/nemotron-3-ultra-550b-a55b:free';
-export const OCR_MODEL = process.env.GEMINI_OCR_MODEL || process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+export const OPENROUTER_OCR_MODEL =
+  process.env.OPENROUTER_OCR_MODEL || 'nvidia/nemotron-nano-12b-v2-vl:free';

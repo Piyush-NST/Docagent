@@ -1,12 +1,15 @@
 // Document extraction, OCR fallback, chunking
 
 import { v4 as uuidv4 } from 'uuid';
-import { GoogleGenerativeAI } from '@google/generative-ai';
 import { isMeaningfulExtractedText } from '@/lib/text-validation';
 import type { DocumentProcessingStatus, PageProcessingStats } from '@/lib/document-status';
 import { OCR_FAILED_USER_MESSAGE } from '@/lib/document-status';
 import { isLikelyPasswordProtectedError } from '@/lib/file-validation';
-import { MAX_OCR_PAGES, OCR_MODEL, READINESS_THRESHOLDS } from '@/lib/config/readiness';
+import {
+  MAX_OCR_PAGES,
+  OPENROUTER_OCR_MODEL,
+  READINESS_THRESHOLDS,
+} from '@/lib/config/readiness';
 
 export interface DocumentChunk {
   id: string;
@@ -51,6 +54,7 @@ export type OcrProviderFailure = {
   code:
     | 'OCR_ACCESS_DENIED'
     | 'OCR_INVALID_API_KEY'
+    | 'OCR_BILLING_REQUIRED'
     | 'OCR_QUOTA_EXCEEDED'
     | 'OCR_RATE_LIMITED'
     | 'OCR_PROVIDER_UNAVAILABLE';
@@ -68,23 +72,34 @@ export function classifyOcrProviderError(error: unknown): OcrProviderFailure {
   const message = error instanceof Error ? error.message : String(error);
   const normalized = message.toLowerCase();
 
-  if (normalized.includes('api key not valid') || normalized.includes('api_key_invalid')) {
+  if (
+    normalized.includes('401') ||
+    normalized.includes('api key not valid') ||
+    normalized.includes('api_key_invalid') ||
+    normalized.includes('invalid api key')
+  ) {
     return {
       code: 'OCR_INVALID_API_KEY',
-      userMessage: 'Text recognition is unavailable because the configured Gemini API key is invalid.',
+      userMessage: 'Text recognition is unavailable because the configured OpenRouter API key is invalid.',
     };
   }
   if (normalized.includes('403') || normalized.includes('denied access') || normalized.includes('permission_denied')) {
     return {
       code: 'OCR_ACCESS_DENIED',
       userMessage:
-        'The image was uploaded, but text recognition is unavailable because the configured Gemini project was denied access.',
+        'The image was uploaded, but the configured OpenRouter account was denied access to the OCR model.',
+    };
+  }
+  if (normalized.includes('402') || normalized.includes('insufficient credits') || normalized.includes('payment')) {
+    return {
+      code: 'OCR_BILLING_REQUIRED',
+      userMessage: 'The image was uploaded, but OpenRouter requires account credit or billing access for OCR.',
     };
   }
   if (normalized.includes('quota') || normalized.includes('resource_exhausted')) {
     return {
       code: 'OCR_QUOTA_EXCEEDED',
-      userMessage: 'The image was uploaded, but the Gemini text-recognition quota has been exhausted.',
+      userMessage: 'The image was uploaded, but the OpenRouter text-recognition quota has been exhausted.',
     };
   }
   if (normalized.includes('429') || normalized.includes('rate limit')) {
@@ -95,8 +110,31 @@ export function classifyOcrProviderError(error: unknown): OcrProviderFailure {
   }
   return {
     code: 'OCR_PROVIDER_UNAVAILABLE',
-    userMessage: 'The image was uploaded, but the Gemini text-recognition service is currently unavailable.',
+    userMessage: 'The image was uploaded, but the OpenRouter text-recognition model is currently unavailable.',
   };
+}
+
+type OpenRouterOcrResponse = {
+  choices?: Array<{
+    message?: {
+      content?: string | Array<{ type?: string; text?: string }>;
+    };
+  }>;
+  error?: { message?: string };
+};
+
+export function extractOpenRouterOcrText(payload: OpenRouterOcrResponse): string {
+  const content = payload.choices?.[0]?.message?.content;
+  const text = Array.isArray(content)
+    ? content.map((part) => (part.type === 'text' ? part.text || '' : '')).join('\n')
+    : content || '';
+
+  return text
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .trim()
+    .replace(/^```(?:text)?\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .trim();
 }
 
 const PAGE_NATIVE_MIN_CHARS = 40;
@@ -119,45 +157,68 @@ Instructions:
 - Return only the extracted text.
 - If no meaningful text is readable, return exactly: NO_READABLE_TEXT`;
 
-async function callGeminiOcr(
+async function callOpenRouterOcr(
   imageBuffer: Buffer,
   mimeType: string,
   prompt: string,
   label: string,
 ): Promise<string> {
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
     throw new OcrProviderError({
       code: 'OCR_INVALID_API_KEY',
-      userMessage: 'Text recognition is unavailable because GEMINI_API_KEY is not configured.',
+      userMessage: 'Text recognition is unavailable because OPENROUTER_API_KEY is not configured.',
     });
   }
 
-  console.log(`[OCR] ${label} started`);
-  const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({ model: OCR_MODEL });
+  console.log(`[OCR] OpenRouter ${label} started with ${OPENROUTER_OCR_MODEL}`);
   const base64 = imageBuffer.toString('base64');
+  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': process.env.OPENROUTER_SITE_URL || 'http://localhost:3000',
+      'X-Title': 'DocAgent OCR',
+    },
+    body: JSON.stringify({
+      model: OPENROUTER_OCR_MODEL,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: prompt },
+            { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64}` } },
+          ],
+        },
+      ],
+      temperature: 0,
+      max_tokens: 4096,
+      provider: { allow_fallbacks: false },
+    }),
+    signal: AbortSignal.timeout(40_000),
+  });
 
-  const result = await model.generateContent([
-    prompt,
-    { inlineData: { mimeType, data: base64 } },
-  ]);
+  const payload = (await response.json().catch(() => ({}))) as OpenRouterOcrResponse;
+  if (!response.ok) {
+    throw new Error(`[${response.status}] ${payload.error?.message || response.statusText || 'OCR request failed'}`);
+  }
 
-  const text = result.response.text()?.trim() || '';
-  console.log(`[OCR] ${label} finished with ${text.length} chars`);
+  const text = extractOpenRouterOcrText(payload);
+  console.log(`[OCR] OpenRouter ${label} finished with ${text.length} chars`);
   return text;
 }
 
 export async function ocrImage(imageBuffer: Buffer, mimeType: string = 'image/png'): Promise<string> {
   try {
-    const primary = await callGeminiOcr(imageBuffer, mimeType, PRIMARY_OCR_PROMPT, 'attempt');
+    const primary = await callOpenRouterOcr(imageBuffer, mimeType, PRIMARY_OCR_PROMPT, 'attempt');
     const primaryCheck = isMeaningfulExtractedText(primary);
     if (primaryCheck.ok) return primaryCheck.cleanedText;
 
     console.log(`[OCR] Primary validation failed: ${primaryCheck.reason || 'unknown'}`);
     console.log('[OCR] Retry triggered with stricter prompt');
 
-    const retry = await callGeminiOcr(imageBuffer, mimeType, STRICT_OCR_PROMPT, 'retry');
+    const retry = await callOpenRouterOcr(imageBuffer, mimeType, STRICT_OCR_PROMPT, 'retry');
     const retryCheck = isMeaningfulExtractedText(retry);
     if (retryCheck.ok) {
       console.log('[OCR] Retry succeeded');
@@ -167,7 +228,7 @@ export async function ocrImage(imageBuffer: Buffer, mimeType: string = 'image/pn
     console.log(`[OCR] Returned no readable text (${retryCheck.reason || 'NO_READABLE_TEXT'})`);
     return '';
   } catch (err) {
-    console.error('[OCR] Gemini OCR call failed:', err instanceof Error ? err.message : 'unknown');
+    console.error('[OCR] OpenRouter OCR call failed:', err instanceof Error ? err.message : 'unknown');
     if (err instanceof OcrProviderError) throw err;
     throw new OcrProviderError(classifyOcrProviderError(err));
   }

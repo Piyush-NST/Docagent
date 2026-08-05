@@ -81,7 +81,7 @@ export function FeatureVisual({ type }: { type: ScrollyStep['visual'] }) {
 
   if (type === 'pipeline') {
     return (
-      <VisualChrome label="Document Pipeline" footer="Gemini · OCR · Vectors">
+      <VisualChrome label="Document Pipeline" footer="OpenRouter · OCR · Vectors">
         <div className="story-pipe-list">
           {[
             { n: 1, title: 'Upload', detail: 'File secured in workspace', state: 'done' },

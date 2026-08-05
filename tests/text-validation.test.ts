@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { isMeaningfulExtractedText } from '../src/lib/text-validation.ts';
 import { buildFailedOcrReadiness, buildReadyReadiness, isDocumentReady } from '../src/lib/document-status.ts';
-import { classifyOcrProviderError } from '../src/lib/document-processor.ts';
+import { classifyOcrProviderError, extractOpenRouterOcrText } from '../src/lib/document-processor.ts';
 
 describe('isMeaningfulExtractedText', () => {
   it('accepts clear printed English text', () => {
@@ -70,12 +70,21 @@ describe('isMeaningfulExtractedText', () => {
 });
 
 describe('failed OCR indexing guards', () => {
-  it('classifies denied Gemini access without blaming the uploaded file', () => {
+  it('classifies denied OCR model access without blaming the uploaded file', () => {
     const failure = classifyOcrProviderError(
       new Error('[403 Forbidden] Your project has been denied access.'),
     );
     assert.equal(failure.code, 'OCR_ACCESS_DENIED');
-    assert.match(failure.userMessage, /project was denied access/i);
+    assert.match(failure.userMessage, /denied access/i);
+  });
+
+  it('extracts text content and removes model reasoning wrappers', () => {
+    assert.equal(
+      extractOpenRouterOcrText({
+        choices: [{ message: { content: '<think>Inspecting image</think>\n```text\nInvoice 4821\n```' } }],
+      }),
+      'Invoice 4821',
+    );
   });
 
   it('preserves the OCR provider failure in readiness output', () => {
@@ -83,10 +92,10 @@ describe('failed OCR indexing guards', () => {
       fileSize: 12000,
       ocrUsed: true,
       errorCode: 'OCR_ACCESS_DENIED',
-      userMessage: 'Gemini project denied access.',
+      userMessage: 'OCR model denied access.',
     });
     assert.equal(readiness.errorCode, 'OCR_ACCESS_DENIED');
-    assert.equal(readiness.userMessage, 'Gemini project denied access.');
+    assert.equal(readiness.userMessage, 'OCR model denied access.');
   });
 
   it('does not create chunks from OCR failure text', () => {

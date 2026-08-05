@@ -1,6 +1,6 @@
 # DocAgent - Document Q&A with AI
 
-A premium document intelligence app for uploading files and asking grounded questions. Uses a pinned OpenRouter model for generative answers and Gemini for image OCR and semantic embeddings.
+A premium document intelligence app for uploading files and asking grounded questions. Uses pinned OpenRouter models for generative answers and image OCR, with Gemini semantic embeddings when available.
 
 🔗 **Live Demo**: https://docagent-ai-rag-system.vercel.app/
 
@@ -20,7 +20,7 @@ A premium document intelligence app for uploading files and asking grounded ques
 - **Frontend**: Next.js, React, TypeScript, Framer Motion
 - **Backend**: Next.js API Routes
 - **AI/LLM**: OpenRouter (`nvidia/nemotron-3-ultra-550b-a55b:free`)
-- **OCR**: Google Gemini Vision — image/scanned text extraction
+- **OCR**: pinned NVIDIA Vision model through OpenRouter — image/scanned text extraction
 - **Storage**: In-memory (Azure Blob optional)
 - **Text Extraction**: `unpdf` for PDFs, `mammoth` for DOCX
 
@@ -30,7 +30,7 @@ A premium document intelligence app for uploading files and asking grounded ques
 
 - Node.js 18+
 - OpenRouter API key (from https://openrouter.ai/settings/keys)
-- Gemini API key for OCR and semantic embeddings (from https://aistudio.google.com/app/apikey)
+- Gemini API key for optional semantic embeddings (from https://aistudio.google.com/app/apikey)
 
 ### Installation
 
@@ -48,7 +48,7 @@ Add your API keys to `.env.local`:
 OPENROUTER_API_KEY=your_openrouter_key
 OPENROUTER_MODEL=nvidia/nemotron-3-ultra-550b-a55b:free
 GEMINI_API_KEY=your_gemini_key
-GEMINI_OCR_MODEL=gemini-2.5-flash
+OPENROUTER_OCR_MODEL=nvidia/nemotron-nano-12b-v2-vl:free
 GEMINI_EMBEDDING_MODEL=gemini-embedding-001
 DATABASE_URL=your_postgres_connection_string
 ```
@@ -76,9 +76,9 @@ Upload a document. It is stored and assigned a unique ID.
 
 ### 2. Text Extraction
 
-- **PDF**: `unpdf` extraction; OCR fallback via Gemini Vision for scans
+- **PDF**: `unpdf` extraction; OCR fallback via pinned OpenRouter Vision for scans
 - **DOCX**: `mammoth`
-- **Images**: Gemini Vision OCR
+- **Images**: pinned OpenRouter Vision OCR
 
 ### 3. Chunking & Embedding
 
@@ -135,7 +135,7 @@ docagent-ai-rag-system/
 DocAgent uses two explicitly scoped providers (`src/lib/gemini.ts`):
 
 - Grounded generative answers: `OPENROUTER_MODEL` (pinned to `nvidia/nemotron-3-ultra-550b-a55b:free`)
-- OCR fallback: `GEMINI_OCR_MODEL` (default `gemini-2.5-flash`)
+- OCR fallback: `OPENROUTER_OCR_MODEL` (pinned to `nvidia/nemotron-nano-12b-v2-vl:free`)
 - Semantic embeddings: `GEMINI_EMBEDDING_MODEL` (default `gemini-embedding-001`)
 
 The OpenRouter request contains one explicit `:free` model, no model fallback list, and provider fallbacks are disabled. NVIDIA's free endpoint does not currently accept OpenRouter's provider-side JSON response parameter, so DocAgent enforces JSON through its prompt and rejects anything that fails the existing structured parser and intent policy. Deterministic fact extraction runs locally before the generative branch. Gemini embeddings use their own key and retain lexical retrieval as a fallback.

@@ -56,7 +56,7 @@ Answer + citations (from retrieved evidence only)
 DocAgent uses explicit provider boundaries:
 
 - Generative answers: OpenRouter `OPENROUTER_MODEL` (default `nvidia/nemotron-3-ultra-550b-a55b:free`) with no model/provider fallback
-- OCR fallback: `GEMINI_OCR_MODEL` (default `gemini-2.5-flash`)
+- OCR fallback: `OPENROUTER_OCR_MODEL` (default `nvidia/nemotron-nano-12b-v2-vl:free`)
 - OCR: same chat model (vision) via `document-processor.ts`
 - Embeddings: `GEMINI_EMBEDDING_MODEL` (default `gemini-embedding-001`)
 

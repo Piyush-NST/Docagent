@@ -43,7 +43,7 @@ const featureSteps: ScrollyStep[] = [
     bullets: [],
     panelTitle: 'Pipeline',
     panelBody: 'Four clear stages take a raw file to a chat-ready knowledge source.',
-    panelMeta: 'Gemini · OCR · Vectors',
+    panelMeta: 'OpenRouter · OCR · Vectors',
     visual: 'pipeline',
   },
   {

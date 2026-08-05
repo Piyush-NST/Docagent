@@ -232,7 +232,7 @@ export default function DocumentUpload({ onDocumentUploaded }: DocumentUploadPro
             data.message ||
             'We could not reliably read text from this upload.',
           details: providerFailure
-            ? 'Enable Gemini API access for the configured project, then retry. Searchable PDF and DOCX files do not require image OCR.'
+            ? 'Check OPENROUTER_API_KEY and OPENROUTER_OCR_MODEL, then retry. Searchable PDF and DOCX files do not require image OCR.'
             : undefined,
         });
       } else if (status === 'limited') {
