@@ -50,7 +50,15 @@ OPENROUTER_MODEL=nvidia/nemotron-3-ultra-550b-a55b:free
 GEMINI_API_KEY=your_gemini_key
 GEMINI_OCR_MODEL=gemini-2.5-flash
 GEMINI_EMBEDDING_MODEL=gemini-embedding-001
+DATABASE_URL=your_postgres_connection_string
 ```
+
+On Vercel, connect a Neon/Postgres integration and expose either `DATABASE_URL`
+or `POSTGRES_URL` to the Production environment. Durable database storage is
+required for document metadata and chunks. Configure Azure Blob storage when
+original-file persistence and cross-instance OCR retries are required; without
+it, Vercel keeps original binaries only in transient `/tmp` storage while the
+initial upload is processed.
 
 Then start:
 

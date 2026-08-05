@@ -14,6 +14,25 @@ import { hashFileBuffer } from '../src/lib/file-hash';
 import { MemoryStore } from '../src/lib/store/memory-store';
 import { resetStoreForTests } from '../src/lib/store';
 import { searchDocument } from '../src/lib/vector-store';
+import { resolvePostgresUrl } from '../src/lib/config/database';
+
+describe('production database configuration', () => {
+  it('accepts standard Neon and Vercel Postgres environment names', () => {
+    assert.equal(resolvePostgresUrl({ DATABASE_URL: 'postgres://database' }), 'postgres://database');
+    assert.equal(resolvePostgresUrl({ POSTGRES_URL: 'postgres://vercel' }), 'postgres://vercel');
+    assert.equal(
+      resolvePostgresUrl({ POSTGRES_PRISMA_URL: 'postgres://prisma' }),
+      'postgres://prisma',
+    );
+  });
+
+  it('prefers DATABASE_URL when multiple connection variables exist', () => {
+    assert.equal(
+      resolvePostgresUrl({ DATABASE_URL: 'postgres://primary', POSTGRES_URL: 'postgres://fallback' }),
+      'postgres://primary',
+    );
+  });
+});
 
 describe('isMeaningfulExtractedText', () => {
   it('rejects empty / whitespace / OCR failures', () => {

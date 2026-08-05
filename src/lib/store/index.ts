@@ -3,6 +3,7 @@ import { MemoryStore } from './memory-store';
 import { PostgresStore } from './postgres-store';
 import type { DocAgentStore, StorageBackend } from './types';
 import { PersistenceUnavailableError } from './types';
+import { resolvePostgresUrl } from '@/lib/config/database';
 
 const globalForStore = globalThis as typeof globalThis & {
   __docAgentStore?: DocAgentStore;
@@ -14,12 +15,12 @@ function resolveBackend(): StorageBackend {
     return forced;
   }
 
-  if (process.env.DATABASE_URL) return 'postgres';
+  if (resolvePostgresUrl()) return 'postgres';
 
   // Vercel serverless has no durable local disk — require Postgres.
   if (process.env.VERCEL === '1') {
     throw new PersistenceUnavailableError(
-      'Persistent storage is required on Vercel. Set DATABASE_URL (Postgres/Neon).',
+      'Persistent storage is required on Vercel. Connect Neon/Postgres and set DATABASE_URL or POSTGRES_URL.',
     );
   }
 

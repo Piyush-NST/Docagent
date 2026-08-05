@@ -1,6 +1,7 @@
 import postgres from 'postgres';
 import type { DocAgentStore, PersistedChunk, PersistedDocument, StorageBackend } from './types';
 import { PersistenceUnavailableError } from './types';
+import { resolvePostgresUrl } from '@/lib/config/database';
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS documents (
@@ -57,10 +58,10 @@ const globalForPg = globalThis as typeof globalThis & {
 };
 
 function getSql(): Sql {
-  const url = process.env.DATABASE_URL;
+  const url = resolvePostgresUrl();
   if (!url) {
     throw new PersistenceUnavailableError(
-      'DATABASE_URL is not configured. Set a Postgres connection string for persistent document storage.',
+      'No Postgres connection is configured. Set DATABASE_URL or POSTGRES_URL for persistent document storage.',
     );
   }
 

@@ -85,6 +85,12 @@ function getUserFriendlyError(error: string): UploadToast {
     AbortError: 'Upload timed out. Please try again with a smaller file or fewer pages.',
     'timed out': 'Upload timed out. Please try again with a smaller file or fewer pages.',
     'took too long': 'Upload timed out. Please try again with a smaller file or fewer pages.',
+    PERSISTENCE_UNAVAILABLE:
+      'Document storage is not configured for this deployment. Connect a Postgres database and redeploy DocAgent.',
+    'Persistent storage is required':
+      'Document storage is not configured for this deployment. Connect a Postgres database and redeploy DocAgent.',
+    'No Postgres connection':
+      'Document storage is not configured for this deployment. Connect a Postgres database and redeploy DocAgent.',
     FILE_TOO_LARGE: `This file is above the ${MAX_UPLOAD_LABEL} processing limit.`,
     'File too large': `This file is above the ${MAX_UPLOAD_LABEL} processing limit.`,
     'extract text': 'Could not read this document. Please try a different file.',
@@ -94,15 +100,24 @@ function getUserFriendlyError(error: string): UploadToast {
 
   for (const [key, message] of Object.entries(errorMap)) {
     if (lowerError.includes(key.toLowerCase())) {
+      const storageConfigurationError =
+        key === 'PERSISTENCE_UNAVAILABLE' ||
+        key === 'Persistent storage is required' ||
+        key === 'No Postgres connection';
       return {
         type: 'error',
-        title: key.toLowerCase().includes('large') || key === 'FILE_TOO_LARGE' ? 'File limit reached' : 'Upload failed',
+        title: storageConfigurationError
+          ? 'Storage not configured'
+          : key.toLowerCase().includes('large') || key === 'FILE_TOO_LARGE'
+            ? 'File limit reached'
+            : 'Upload failed',
         message,
-        details:
-          key.toLowerCase().includes('large') || key === 'FILE_TOO_LARGE'
+        details: storageConfigurationError
+          ? 'Set DATABASE_URL or POSTGRES_URL in the Vercel project environment for Production.'
+          : key.toLowerCase().includes('large') || key === 'FILE_TOO_LARGE'
             ? undefined
             : `Supported uploads: ${SUPPORTED_UPLOAD_LABEL}, up to ${MAX_UPLOAD_LABEL}.`,
-        limitLabel: MAX_UPLOAD_LABEL,
+        limitLabel: storageConfigurationError ? undefined : MAX_UPLOAD_LABEL,
       };
     }
   }

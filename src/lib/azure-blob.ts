@@ -1,6 +1,7 @@
 // Original document binary storage (Azure Blob when configured, else local .data/blobs)
 
 import { promises as fs } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { BlobServiceClient, ContainerClient, BlockBlobClient } from '@azure/storage-blob';
 import { v4 as uuidv4 } from 'uuid';
@@ -15,7 +16,9 @@ export interface DocumentMetadata {
 }
 
 const hasAzureStorage = !!process.env.AZURE_STORAGE_CONNECTION_STRING;
-const BLOB_ROOT = path.join(process.cwd(), '.data', 'blobs');
+const BLOB_ROOT = process.env.VERCEL === '1'
+  ? path.join(os.tmpdir(), 'docagent-blobs')
+  : path.join(process.cwd(), '.data', 'blobs');
 
 function getContainerClient(): ContainerClient | null {
   if (!hasAzureStorage) return null;
@@ -34,7 +37,7 @@ async function ensureLocalDirs(documentId: string): Promise<string> {
 export async function ensureContainerExists(): Promise<void> {
   if (!hasAzureStorage) {
     await fs.mkdir(BLOB_ROOT, { recursive: true });
-    console.log('[Local] Using filesystem blob storage at .data/blobs');
+    console.log(`[Local] Using transient filesystem blob storage at ${BLOB_ROOT}`);
     return;
   }
 
