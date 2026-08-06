@@ -149,7 +149,7 @@ The OpenRouter request contains one explicit `:free` model, no model fallback li
 When OpenRouter generation is unavailable, DocAgent labels the response as a local grounded fallback. It never sends provider error text or malformed model output to the answer body.
 
 OpenRouter's NVIDIA free-endpoint notice says not to submit confidential information or personal data because free-endpoint prompts may be logged and used to improve NVIDIA products. Use this configuration only for documents you are authorized to transmit under those terms.
-## Example Questions
+## Example Questions(to Try)
 
 After uploading, try:
 
