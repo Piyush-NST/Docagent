@@ -29,6 +29,9 @@ import {
 const isMockMode = process.env.USE_MOCK_MODE === 'true';
 const answerModel = OPENROUTER_ANSWER_MODEL;
 export const DOCAGENT_PROMPT_VERSION = 'precise-rag-v5-nemotron-recovery';
+const EMBEDDING_REQUEST_TIMEOUT_MS = 10_000;
+const OPENROUTER_REQUEST_TIMEOUT_MS = 60_000;
+const OPENROUTER_TRANSIENT_RETRIES = 1;
 
 export type ProviderFailureReason =
   | 'invalid_api_key'
@@ -175,7 +178,7 @@ export async function generateEmbedding(text: string): Promise<EmbeddingResult |
     const response = await model.embedContent({
       content: { role: 'user', parts: [{ text: cleaned }] },
       taskType: TaskType.RETRIEVAL_DOCUMENT,
-    });
+    }, { timeout: EMBEDDING_REQUEST_TIMEOUT_MS });
     const values = response.embedding?.values;
     if (!values?.length) return null;
     return { embedding: l2Normalize(values), model: EMBEDDING_MODEL, degraded: false };
@@ -201,7 +204,7 @@ export async function generateQueryEmbedding(text: string): Promise<EmbeddingRes
     const response = await model.embedContent({
       content: { role: 'user', parts: [{ text: cleaned }] },
       taskType: TaskType.RETRIEVAL_QUERY,
-    });
+    }, { timeout: EMBEDDING_REQUEST_TIMEOUT_MS });
     const values = response.embedding?.values;
     if (!values?.length) return null;
     return { embedding: l2Normalize(values), model: EMBEDDING_MODEL, degraded: false };
@@ -1005,18 +1008,7 @@ export async function recoverModelStructuredAnswer(args: {
       outputTokensBudget: args.initialBudget,
     };
   }
-  if (first.answer) {
-    return {
-      rawOutput: args.initial.content,
-      finishReason: args.initial.finishReason,
-      failureReason: 'unsupported_answer',
-      retryUsed: false,
-      normalizationApplied: Array.from(normalizationApplied),
-      outputTokensBudget: args.initialBudget,
-    };
-  }
-
-  const truncated = isLikelyTruncatedOutput(args.initial.content, args.initial.finishReason);
+  const truncated = !first.answer && isLikelyTruncatedOutput(args.initial.content, args.initial.finishReason);
   const retryType: StructuredRetryType = truncated ? 'truncation' : 'repair';
   const retryBudget = truncated ? Math.min(args.initialBudget * 2, 4000) : Math.max(args.initialBudget, 1200);
   const retried = await args.retry(retryType, args.initial.content, retryBudget);
@@ -1061,35 +1053,58 @@ async function generateOpenRouterAnswer(
     throw new OpenRouterRequestError('OPENROUTER_MODEL must name an explicit :free model.', 400);
   }
 
-  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-      'HTTP-Referer': process.env.OPENROUTER_SITE_URL || 'http://localhost:3000',
-      'X-OpenRouter-Title': 'DocAgent',
-    },
-    body: JSON.stringify({
-      model: answerModel,
-      messages: [
-        { role: 'system', content: DOCAGENT_SYSTEM_INSTRUCTION },
-        { role: 'user', content: prompt },
-      ],
-      temperature: 0.15,
-      top_p: 0.8,
-      seed: 7,
-      max_tokens: tokenBudget,
-      stream: false,
-      provider: {
-        only: ['NVIDIA'],
-        allow_fallbacks: false,
-        require_parameters: true,
-      },
-    }),
-    signal: AbortSignal.timeout(120_000),
-  });
+  let response: Response | undefined;
+  let responseText: string | undefined;
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= OPENROUTER_TRANSIENT_RETRIES; attempt++) {
+    try {
+      response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': process.env.OPENROUTER_SITE_URL || 'http://localhost:3000',
+          'X-OpenRouter-Title': 'DocAgent',
+        },
+        body: JSON.stringify({
+          model: answerModel,
+          messages: [
+            { role: 'system', content: DOCAGENT_SYSTEM_INSTRUCTION },
+            { role: 'user', content: prompt },
+          ],
+          temperature: 0.15,
+          top_p: 0.8,
+          seed: 7,
+          max_tokens: tokenBudget,
+          stream: false,
+          reasoning: { enabled: false, exclude: true },
+          provider: {
+            only: ['NVIDIA'],
+            allow_fallbacks: false,
+            require_parameters: true,
+          },
+        }),
+        signal: AbortSignal.timeout(OPENROUTER_REQUEST_TIMEOUT_MS),
+      });
+      const transientStatus = response.status === 429 || response.status >= 500;
+      if (transientStatus && attempt < OPENROUTER_TRANSIENT_RETRIES) {
+        console.warn(`[OpenRouter] Transient HTTP ${response.status}; retrying the exact configured model once.`);
+        await new Promise((resolve) => setTimeout(resolve, 750));
+        continue;
+      }
+      responseText = await response.text();
+      break;
+    } catch (error) {
+      lastError = error;
+      if (attempt >= OPENROUTER_TRANSIENT_RETRIES) throw error;
+      console.warn('[OpenRouter] Transient request failure; retrying the exact configured model once.');
+      await new Promise((resolve) => setTimeout(resolve, 750));
+    }
+  }
+  if (!response || responseText === undefined) {
+    throw lastError || new OpenRouterRequestError('OpenRouter request failed before receiving a complete response.');
+  }
 
-  const responseText = await response.text();
   let payload: Record<string, unknown> | null = null;
   try {
     payload = JSON.parse(responseText) as Record<string, unknown>;
@@ -1107,14 +1122,19 @@ async function generateOpenRouterAnswer(
   const choices = payload?.choices;
   const first = Array.isArray(choices) ? choices[0] : undefined;
   const message = typeof first === 'object' && first !== null && 'message' in first ? first.message : undefined;
-  const content = typeof message === 'object' && message !== null && 'content' in message ? message.content : undefined;
+  const rawContent = typeof message === 'object' && message !== null && 'content' in message ? message.content : undefined;
+  const content = Array.isArray(rawContent)
+    ? rawContent
+        .map((part) => (typeof part === 'object' && part !== null && 'text' in part ? String(part.text || '') : ''))
+        .join('\n')
+    : rawContent;
   const finishReason = typeof first === 'object' && first !== null && 'finish_reason' in first
     ? String(first.finish_reason)
     : undefined;
   if (typeof content !== 'string' || !content.trim()) {
     throw new OpenRouterRequestError('OpenRouter returned no answer content.', 502);
   }
-  return { content, finishReason };
+  return { content: content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim(), finishReason };
 }
 
 export function generationFallbackNotice(reason?: ProviderFailureReason): string | undefined {
@@ -1313,11 +1333,11 @@ User request: ${question}`;
             tokenBudget,
           );
         }
-        console.warn('[OpenRouter] Structured response was malformed; requesting one JSON-only repair.');
+        console.warn('[OpenRouter] Structured response was malformed or mismatched; requesting one JSON-only repair.');
         return generateOpenRouterAnswer(
           `Repair the response below into valid JSON matching this exact schema:\n` +
           `{ "answer": "string", "answerType": "fact | overview | summary | detail | synthesis", "citationIds": [1], "items": [{ "label": "string", "value": "string", "citationIds": [1] }] }\n\n` +
-          `Do not change its factual content. Do not add information. Remove Markdown syntax. Use normal double quotes, no trailing commas, no comments, and no code fences. Return JSON only.\n\n` +
+          `Do not change its factual content. Do not add information. The corrected answerType must satisfy the ${answerIntent} intent described in the original request. Remove Markdown syntax. Use normal double quotes, no trailing commas, no comments, and no code fences. Return JSON only.\n\n` +
           `<response_to_repair>\n${rawOutput}\n</response_to_repair>`,
           mode,
           answerIntent,

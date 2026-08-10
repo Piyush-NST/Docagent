@@ -188,6 +188,32 @@ describe('adaptive grounded answer quality', () => {
     assert.match(generationFallbackNotice('structured_output_invalid') || '', /local grounded fallback/i);
   });
 
+  it('repairs a valid response whose answer type does not match the requested intent', async () => {
+    let calls = 0;
+    const recovered = await recoverModelStructuredAnswer({
+      initial: {
+        content: JSON.stringify({ answer: 'A short overview.', answerType: 'overview', citationIds: [1], items: [] }),
+        finishReason: 'stop',
+      },
+      intent: 'summary',
+      initialBudget: 1600,
+      retry: async (type, _raw, budget) => {
+        calls += 1;
+        assert.equal(type, 'repair');
+        assert.equal(budget, 1600);
+        return {
+          content: JSON.stringify({ answer: 'A concise summary.', answerType: 'summary', citationIds: [1], items: [] }),
+          finishReason: 'stop',
+        };
+      },
+    });
+
+    assert.equal(calls, 1);
+    assert.equal(recovered.answer?.answerType, 'summary');
+    assert.equal(recovered.retryUsed, true);
+    assert.equal(recovered.retryType, 'repair');
+  });
+
   it('distinguishes Gemini quota, key, billing, rate, and access failures', () => {
     const failure = (message: string, status: number) => Object.assign(new Error(message), { status });
     assert.equal(classifyGeminiError(failure('API_KEY_INVALID: API key not valid', 400)).reason, 'invalid_api_key');

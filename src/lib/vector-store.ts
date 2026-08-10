@@ -55,13 +55,18 @@ export async function storeDocumentChunks(
   const persisted: PersistedChunk[] = [];
   let embeddingsCreated = 0;
   let anyEmbeddingFailed = false;
+  let embeddingsUnavailable = false;
 
   for (const chunk of chunks) {
-    const embedded = await generateEmbedding(chunk.content);
+    const embedded = embeddingsUnavailable ? null : await generateEmbedding(chunk.content);
     if (embedded?.embedding?.length) {
       embeddingsCreated += 1;
     } else {
       anyEmbeddingFailed = true;
+      if (!embeddingsUnavailable) {
+        embeddingsUnavailable = true;
+        console.warn('[Embedding] Provider unavailable; indexing remaining chunks for lexical retrieval only.');
+      }
     }
 
     persisted.push({

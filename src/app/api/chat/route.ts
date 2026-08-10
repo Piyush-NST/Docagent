@@ -21,6 +21,8 @@ interface ChatRequest {
   history?: Array<{ role: 'user' | 'assistant'; content: string }>;
 }
 
+export const maxDuration = 180;
+
 function normalizeMode(mode: unknown): ChatMode {
   if (mode === 'summarize' || mode === 'compare' || mode === 'extract' || mode === 'ask') return mode;
   return 'ask';

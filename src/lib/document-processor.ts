@@ -116,8 +116,10 @@ export function classifyOcrProviderError(error: unknown): OcrProviderFailure {
 
 type OpenRouterOcrResponse = {
   choices?: Array<{
+    finish_reason?: string;
     message?: {
       content?: string | Array<{ type?: string; text?: string }>;
+      reasoning?: string | null;
     };
   }>;
   error?: { message?: string };
@@ -138,6 +140,8 @@ export function extractOpenRouterOcrText(payload: OpenRouterOcrResponse): string
 }
 
 const PAGE_NATIVE_MIN_CHARS = 40;
+const PRIMARY_OCR_TIMEOUT_MS = 15_000;
+const RETRY_OCR_TIMEOUT_MS = 15_000;
 
 const PRIMARY_OCR_PROMPT = `Extract ALL readable handwritten and printed text from this image exactly as it appears.
 Return only the extracted text, nothing else.
@@ -162,6 +166,7 @@ async function callOpenRouterOcr(
   mimeType: string,
   prompt: string,
   label: string,
+  timeoutMs: number,
 ): Promise<string> {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
@@ -194,31 +199,75 @@ async function callOpenRouterOcr(
       ],
       temperature: 0,
       max_tokens: 4096,
-      provider: { allow_fallbacks: false },
+      reasoning: { enabled: false, exclude: true },
+      provider: {
+        only: ['NVIDIA'],
+        allow_fallbacks: false,
+        require_parameters: true,
+      },
     }),
-    signal: AbortSignal.timeout(40_000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
 
-  const payload = (await response.json().catch(() => ({}))) as OpenRouterOcrResponse;
+  let payload: OpenRouterOcrResponse;
+  try {
+    payload = (await response.json()) as OpenRouterOcrResponse;
+  } catch (error) {
+    throw new Error(
+      `OCR response body could not be read: ${error instanceof Error ? error.message : 'unknown response error'}`,
+    );
+  }
   if (!response.ok) {
     throw new Error(`[${response.status}] ${payload.error?.message || response.statusText || 'OCR request failed'}`);
   }
 
   const text = extractOpenRouterOcrText(payload);
+  if (!text) {
+    const choice = payload.choices?.[0];
+    const rawContent = choice?.message?.content;
+    console.warn('[OCR] OpenRouter returned an empty OCR response', {
+      status: response.status,
+      finishReason: choice?.finish_reason,
+      contentType: Array.isArray(rawContent) ? 'array' : typeof rawContent,
+      contentParts: Array.isArray(rawContent) ? rawContent.length : undefined,
+      hasReasoning: Boolean(choice?.message?.reasoning),
+      providerError: Boolean(payload.error?.message),
+    });
+  }
   console.log(`[OCR] OpenRouter ${label} finished with ${text.length} chars`);
   return text;
 }
 
 export async function ocrImage(imageBuffer: Buffer, mimeType: string = 'image/png'): Promise<string> {
   try {
-    const primary = await callOpenRouterOcr(imageBuffer, mimeType, PRIMARY_OCR_PROMPT, 'attempt');
+    let primary = '';
+    try {
+      primary = await callOpenRouterOcr(
+        imageBuffer,
+        mimeType,
+        PRIMARY_OCR_PROMPT,
+        'attempt',
+        PRIMARY_OCR_TIMEOUT_MS,
+      );
+    } catch (error) {
+      console.warn(
+        '[OCR] Primary transport attempt failed; retrying once with the strict OCR request:',
+        error instanceof Error ? error.message : 'unknown',
+      );
+    }
     const primaryCheck = isMeaningfulExtractedText(primary);
     if (primaryCheck.ok) return primaryCheck.cleanedText;
 
     console.log(`[OCR] Primary validation failed: ${primaryCheck.reason || 'unknown'}`);
     console.log('[OCR] Retry triggered with stricter prompt');
 
-    const retry = await callOpenRouterOcr(imageBuffer, mimeType, STRICT_OCR_PROMPT, 'retry');
+    const retry = await callOpenRouterOcr(
+      imageBuffer,
+      mimeType,
+      STRICT_OCR_PROMPT,
+      'retry',
+      RETRY_OCR_TIMEOUT_MS,
+    );
     const retryCheck = isMeaningfulExtractedText(retry);
     if (retryCheck.ok) {
       console.log('[OCR] Retry succeeded');
