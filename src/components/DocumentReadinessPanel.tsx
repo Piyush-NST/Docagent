@@ -28,6 +28,7 @@ export interface DocumentReadiness {
 interface DocumentReadinessPanelProps {
   fileName: string;
   readiness: DocumentReadiness;
+  onRetryOcr?: () => Promise<void>;
 }
 
 type ReadinessTone = 'good' | 'warn' | 'bad';
@@ -159,8 +160,10 @@ function ChevronIcon() {
 
 export type { DocumentProcessingStatus };
 
-export default function DocumentReadinessPanel({ fileName, readiness }: DocumentReadinessPanelProps) {
+export default function DocumentReadinessPanel({ fileName, readiness, onRetryOcr }: DocumentReadinessPanelProps) {
   const [detailsState, setDetailsState] = useState({ fileName, open: false });
+  const [retrying, setRetrying] = useState(false);
+  const [retryError, setRetryError] = useState('');
   const detailsOpen = detailsState.fileName === fileName && detailsState.open;
   const failed = readiness.status === 'ocr_failed' || readiness.status === 'failed';
   const coverage = Math.max(
@@ -181,6 +184,19 @@ export default function DocumentReadinessPanel({ fileName, readiness }: Document
     : totalPages
       ? `${formatNumber(totalPages)} / ${formatNumber(totalPages)}`
       : 'Unavailable';
+
+  const retryOcr = async () => {
+    if (!onRetryOcr || retrying) return;
+    setRetrying(true);
+    setRetryError('');
+    try {
+      await onRetryOcr();
+    } catch (error) {
+      setRetryError(error instanceof Error ? error.message : 'OCR retry failed. Please try again.');
+    } finally {
+      setRetrying(false);
+    }
+  };
 
   const technicalDetails = [
     ['Extracted text', `${formatNumber(readiness.textLength)} characters`],
@@ -255,6 +271,14 @@ export default function DocumentReadinessPanel({ fileName, readiness }: Document
                 </span>
               ))}
             </div>
+            {onRetryOcr ? (
+              <div className="readiness-retry-row">
+                <button type="button" onClick={retryOcr} disabled={retrying}>
+                  {retrying ? 'Retrying OCR...' : 'Retry OCR'}
+                </button>
+                {retryError ? <span role="alert">{retryError}</span> : null}
+              </div>
+            ) : null}
           </div>
         ) : null}
       </div>

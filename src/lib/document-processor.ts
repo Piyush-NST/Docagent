@@ -140,8 +140,10 @@ export function extractOpenRouterOcrText(payload: OpenRouterOcrResponse): string
 }
 
 const PAGE_NATIVE_MIN_CHARS = 40;
-const PRIMARY_OCR_TIMEOUT_MS = 15_000;
-const RETRY_OCR_TIMEOUT_MS = 15_000;
+// The free NVIDIA vision endpoint has substantial tail latency. Keep each call
+// bounded, but allow enough time for real screenshots to finish processing.
+const PRIMARY_OCR_TIMEOUT_MS = 90_000;
+const RETRY_OCR_TIMEOUT_MS = 60_000;
 
 const PRIMARY_OCR_PROMPT = `Extract ALL readable handwritten and printed text from this image exactly as it appears.
 Return only the extracted text, nothing else.

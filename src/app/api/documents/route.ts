@@ -21,6 +21,8 @@ import { isPersistenceError } from '@/lib/store';
 import { INDEX_VERSION, isCurrentIndexVersion } from '@/lib/config/indexing';
 import { deleteVercelBlob, downloadVercelBlob } from '@/lib/vercel-blob';
 
+export const maxDuration = 300;
+
 const retryLocks = new Set<string>();
 
 function mapReadiness(

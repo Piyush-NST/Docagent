@@ -28,7 +28,7 @@ export const maxDuration = 300;
 
 const STORAGE_TIMEOUT_MS = 20_000;
 const RECEIVE_FILE_TIMEOUT_MS = 45_000;
-const DOCUMENT_PROCESSING_TIMEOUT_MS = 90_000;
+const DOCUMENT_PROCESSING_TIMEOUT_MS = 180_000;
 const EMBEDDING_TIMEOUT_MS = 30_000;
 
 class UploadStepTimeoutError extends Error {

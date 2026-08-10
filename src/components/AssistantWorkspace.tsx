@@ -167,6 +167,34 @@ export default function AssistantWorkspace() {
     setSelectedDoc(doc);
   };
 
+  const handleRetryOcr = async () => {
+    if (!selectedDoc) return;
+
+    const res = await fetch('/api/documents', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'retry-ocr', documentId: selectedDoc.documentId }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.message || 'OCR retry failed. Please try again.');
+    }
+
+    const readiness = mapProcessingToReadiness(
+      selectedDoc.readiness?.fileSize || 0,
+      data.processing,
+      data.status,
+    );
+    const updated: Document = {
+      ...selectedDoc,
+      chunkCount: data.processing.totalChunks,
+      status: readiness.status,
+      readiness,
+    };
+    setDocuments((current) => current.map((doc) => (doc.documentId === updated.documentId ? updated : doc)));
+    setSelectedDoc(updated);
+  };
+
   const documentReady = isQueryable(selectedDoc?.status || selectedDoc?.readiness?.status);
 
   return (
@@ -202,7 +230,11 @@ export default function AssistantWorkspace() {
 
         <div className="right-rail">
           {selectedDoc?.readiness ? (
-            <DocumentReadinessPanel fileName={selectedDoc.fileName} readiness={selectedDoc.readiness} />
+            <DocumentReadinessPanel
+              fileName={selectedDoc.fileName}
+              readiness={selectedDoc.readiness}
+              onRetryOcr={handleRetryOcr}
+            />
           ) : null}
           <ChatInterface
             documentId={selectedDoc?.documentId || null}
