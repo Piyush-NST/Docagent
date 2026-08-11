@@ -53,10 +53,11 @@ export default function UploadSupportNotice() {
             <div className="upload-support-copy">
               <div className="upload-support-title-row">
                 <strong>Upload support is improving</strong>
-                <span className="upload-support-beta">Beta</span>
+                <span className="upload-support-beta">BETA</span>
               </div>
               <p>
-                Handwritten and blurry images may be less accurate. We&apos;re also improving support for files larger than 20 MB.
+                Image uploads are still in beta. PNG, JPEG, handwritten, blurry, and large files may be less reliable for
+                now.
               </p>
             </div>
             <button
