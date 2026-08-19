@@ -2,7 +2,7 @@
 
 A premium document intelligence app for uploading files and asking grounded questions. Uses pinned OpenRouter models for generative answers and image OCR, with Gemini semantic embeddings when available.
 
-🔗 **Live Demo**: https://docagent-ai-rag-system.vercel.app/
+🔗 **Live Demo**: https://docagent-xi.vercel.app/
 
 ## Features
 
