@@ -178,7 +178,8 @@ async function callOpenRouterOcr(
     });
   }
 
-  console.log(`[OCR] OpenRouter ${label} started with ${OPENROUTER_OCR_MODEL}`);
+  const ocrModel = process.env.OPENROUTER_OCR_MODEL || OPENROUTER_OCR_MODEL;
+  console.log(`[OCR] OpenRouter ${label} started with ${ocrModel}`);
   const base64 = imageBuffer.toString('base64');
   const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
@@ -189,7 +190,7 @@ async function callOpenRouterOcr(
       'X-Title': 'DocAgent OCR',
     },
     body: JSON.stringify({
-      model: OPENROUTER_OCR_MODEL,
+      model: ocrModel,
       messages: [
         {
           role: 'user',

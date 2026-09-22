@@ -48,7 +48,7 @@ Add your API keys to `.env.local`:
 OPENROUTER_API_KEY=your_openrouter_key
 OPENROUTER_MODEL=nvidia/nemotron-3-ultra-550b-a55b:free
 GEMINI_API_KEY=your_gemini_key
-OPENROUTER_OCR_MODEL=nvidia/nemotron-nano-12b-v2-vl:free
+OPENROUTER_OCR_MODEL=nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free
 GEMINI_EMBEDDING_MODEL=gemini-embedding-001
 DATABASE_URL=your_postgres_connection_string
 BLOB_READ_WRITE_TOKEN=your_private_vercel_blob_token
@@ -141,7 +141,7 @@ docagent-ai-rag-system/
 DocAgent uses two explicitly scoped providers (`src/lib/gemini.ts`):
 
 - Grounded generative answers: `OPENROUTER_MODEL` (pinned to `nvidia/nemotron-3-ultra-550b-a55b:free`)
-- OCR fallback: `OPENROUTER_OCR_MODEL` (pinned to `nvidia/nemotron-nano-12b-v2-vl:free`)
+- OCR fallback: `OPENROUTER_OCR_MODEL` (pinned to `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free`)
 - Semantic embeddings: `GEMINI_EMBEDDING_MODEL` (default `gemini-embedding-001`)
 
 The OpenRouter request contains one explicit `:free` model, no model fallback list, and provider fallbacks are disabled. NVIDIA's free endpoint does not currently accept OpenRouter's provider-side JSON response parameter, so DocAgent enforces JSON through its prompt and rejects anything that fails the existing structured parser and intent policy. Deterministic fact extraction runs locally before the generative branch. Gemini embeddings use their own key and retain lexical retrieval as a fallback.

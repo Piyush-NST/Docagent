@@ -154,3 +154,70 @@ describe('retry concurrency lock pattern', () => {
     assert.equal(startRetry(), 'started');
   });
 });
+
+describe('OCR model configuration', () => {
+  it('uses nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free as default OCR model', async () => {
+    const saved = process.env.OPENROUTER_OCR_MODEL;
+    delete process.env.OPENROUTER_OCR_MODEL;
+    const { OPENROUTER_OCR_MODEL } = await import('../src/lib/config/readiness.ts');
+    assert.equal(OPENROUTER_OCR_MODEL, 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free');
+    if (saved) process.env.OPENROUTER_OCR_MODEL = saved;
+  });
+
+  it('supports environment variable override for OPENROUTER_OCR_MODEL', () => {
+    const customModel = 'custom/ocr-model:free';
+    process.env.OPENROUTER_OCR_MODEL = customModel;
+    const resolved = process.env.OPENROUTER_OCR_MODEL || 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free';
+    assert.equal(resolved, customModel);
+    delete process.env.OPENROUTER_OCR_MODEL;
+  });
+
+  it('sends correct OCR model and provider options in OpenRouter request', async () => {
+    const { ocrImage } = await import('../src/lib/document-processor.ts');
+    const originalFetch = globalThis.fetch;
+    const originalApiKey = process.env.OPENROUTER_API_KEY;
+    const originalModel = process.env.OPENROUTER_OCR_MODEL;
+
+    process.env.OPENROUTER_API_KEY = 'test-key';
+    delete process.env.OPENROUTER_OCR_MODEL;
+
+    let capturedBody: Record<string, unknown> | null = null;
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      if (typeof init?.body === 'string') {
+        capturedBody = JSON.parse(init.body);
+      }
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: 'Extracted text from test image successfully.',
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    }) as typeof fetch;
+
+    try {
+      const result = await ocrImage(Buffer.from('fake-image-bytes'), 'image/png');
+      assert.equal(result, 'Extracted text from test image successfully.');
+      assert.ok(capturedBody);
+      assert.equal(capturedBody.model, 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free');
+      assert.deepEqual(capturedBody.provider, {
+        only: ['NVIDIA'],
+        allow_fallbacks: false,
+        require_parameters: true,
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (originalApiKey) process.env.OPENROUTER_API_KEY = originalApiKey;
+      else delete process.env.OPENROUTER_API_KEY;
+      if (originalModel) process.env.OPENROUTER_OCR_MODEL = originalModel;
+      else delete process.env.OPENROUTER_OCR_MODEL;
+    }
+  });
+});
+
+
